@@ -1,0 +1,9 @@
+node_modules/
+data/tiles/
+data/fonts/
+data/sprites/
+data/styles/
+data/photon-index/
+data/version.json
+.env
+*.log

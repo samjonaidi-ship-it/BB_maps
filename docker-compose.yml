@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # --- BB_Maps API server ---
+  bb-maps:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - PORT=8080
+      - PHOTON_URL=http://photon:2322
+      - TILES_DIR=/data/tiles
+      - STYLES_DIR=/data/styles
+      - FONTS_DIR=/data/fonts
+      - SPRITES_DIR=/data/sprites
+      - VERSION_FILE=/data/version.json
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - NODE_ENV=production
+    volumes:
+      - tiles-data:/data/tiles
+      - map-assets:/data
+    depends_on:
+      photon:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # --- Photon Geocoder (OSM-based, Bay Area extract) ---
+  # Uses Mapstack's pre-built Photon image with auto-download
+  photon:
+    image: codingkiwi/mapstack-photon:latest
+    environment:
+      # Download Bay Area extract on first boot (~500MB)
+      - PHOTON_COUNTRY=us
+      - PHOTON_DOWNLOAD_URL=${PHOTON_DOWNLOAD_URL:-}
+    volumes:
+      - photon-data:/photon/photon_data
+    ports:
+      - "2322:2322"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:2322/api?q=test&limit=1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+volumes:
+  tiles-data:
+    driver: local
+  photon-data:
+    driver: local
+  map-assets:
+    driver: local
