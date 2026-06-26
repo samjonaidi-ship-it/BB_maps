@@ -21,7 +21,9 @@ services:
       - NODE_ENV=production
     volumes:
       - tiles-data:/data/tiles
-      - map-assets:/data
+      - styles-data:/data/styles
+      - fonts-data:/data/fonts
+      - sprites-data:/data/sprites
     depends_on:
       photon:
         condition: service_healthy
@@ -60,7 +62,11 @@ services:
 volumes:
   tiles-data:
     driver: local
-  photon-data:
+  styles-data:
     driver: local
-  map-assets:
+  fonts-data:
+    driver: local
+  sprites-data:
+    driver: local
+  photon-data:
     driver: local

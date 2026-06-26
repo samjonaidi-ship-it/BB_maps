@@ -7,7 +7,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { getSatelliteUsage } from './satellite.js';
+import { getSatelliteUsage, resetSatelliteUsage } from './satellite.js';
 
 const VERSION_FILE = process.env.VERSION_FILE || resolve('data/version.json');
 
@@ -22,9 +22,13 @@ const counters = {
   startedAt: new Date().toISOString(),
 };
 
-export async function adminRoute(fastify) {
-  // Request counting hook
-  fastify.addHook('onResponse', (request, reply, done) => {
+/**
+ * Root-level counting hook — must be registered on the root Fastify instance
+ * (not inside the encapsulated admin plugin) to see all route requests.
+ * Call registerCountingHook(app) from index.js before route registration.
+ */
+export function registerCountingHook(rootApp) {
+  rootApp.addHook('onResponse', (request, _reply, done) => {
     const path = request.url;
     if (path.startsWith('/tiles')) counters.tiles++;
     else if (path.startsWith('/geocode')) counters.geocode++;
@@ -34,6 +38,9 @@ export async function adminRoute(fastify) {
     else if (path.startsWith('/styles')) counters.styles++;
     done();
   });
+}
+
+export async function adminRoute(fastify) {
 
   // GET /admin/version — tile version manifest
   fastify.get('/version', async (request, reply) => {
@@ -100,6 +107,7 @@ export async function adminRoute(fastify) {
     counters.sprites = 0;
     counters.styles = 0;
     counters.startedAt = new Date().toISOString();
+    resetSatelliteUsage();
 
     reply.send({ ok: true, reset: counters.startedAt });
   });

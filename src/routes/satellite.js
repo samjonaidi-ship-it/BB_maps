@@ -15,6 +15,10 @@ const ESRI_BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Im
 // Simple in-memory usage counter (reset on restart; persisted via /admin/usage)
 let tileRequestCount = 0;
 
+export function resetSatelliteUsage() {
+  tileRequestCount = 0;
+}
+
 export async function satelliteRoute(fastify) {
   // GET /satellite/:z/:y/:x.jpg
   fastify.get('/:z/:y/:x', async (request, reply) => {
@@ -45,6 +49,7 @@ export async function satelliteRoute(fastify) {
       tileRequestCount++;
 
       if (statusCode !== 200) {
+        await body.dump();
         // Esri returns 404 for missing tiles at high zoom in ocean/wilderness
         if (statusCode === 404) {
           reply.header('Cache-Control', 'public, max-age=86400');

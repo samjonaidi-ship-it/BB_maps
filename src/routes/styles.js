@@ -97,7 +97,7 @@ function resolveStyleUrls(style, baseUrl) {
       }
       if (source.tiles) {
         resolved.sources[key] = {
-          ...source,
+          ...(resolved.sources[key] || source),
           tiles: source.tiles.map(t => t.replace('{baseUrl}', baseUrl)),
         };
       }

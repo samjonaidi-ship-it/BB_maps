@@ -8,7 +8,7 @@ import { satelliteRoute } from './routes/satellite.js';
 import { stylesRoute } from './routes/styles.js';
 import { fontsRoute } from './routes/fonts.js';
 import { spritesRoute } from './routes/sprites.js';
-import { adminRoute } from './routes/admin.js';
+import { adminRoute, registerCountingHook } from './routes/admin.js';
 import { healthRoute } from './routes/health.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -34,6 +34,9 @@ await app.register(rateLimit, {
   max: parseInt(process.env.RATE_LIMIT_MAX || '200', 10),
   timeWindow: '1 minute',
 });
+
+// --- Request Counting (root-level to see all routes) ---
+registerCountingHook(app);
 
 // --- Routes ---
 await app.register(tilesRoute, { prefix: '/tiles' });

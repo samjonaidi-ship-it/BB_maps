@@ -60,20 +60,23 @@ export async function tilesRoute(fastify) {
 
     const contentLength = end - start + 1;
     const fd = await open(filePath, 'r');
-    const buffer = Buffer.alloc(contentLength);
-    await fd.read(buffer, 0, contentLength, start);
-    await fd.close();
+    try {
+      const buffer = Buffer.alloc(contentLength);
+      await fd.read(buffer, 0, contentLength, start);
 
-    reply
-      .code(206)
-      .header('Content-Type', 'application/octet-stream')
-      .header('Content-Range', `bytes ${start}-${end}/${fileSize}`)
-      .header('Content-Length', contentLength)
-      .header('Accept-Ranges', 'bytes')
-      .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-      .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+      reply
+        .code(206)
+        .header('Content-Type', 'application/octet-stream')
+        .header('Content-Range', `bytes ${start}-${end}/${fileSize}`)
+        .header('Content-Length', contentLength)
+        .header('Accept-Ranges', 'bytes')
+        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+        .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
 
-    return reply.send(buffer);
+      return reply.send(buffer);
+    } finally {
+      await fd.close();
+    }
   });
 
   // HEAD /tiles/:filename — for MapLibre to discover file size

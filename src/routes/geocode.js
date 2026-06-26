@@ -50,6 +50,7 @@ export async function geocodeRoute(fastify) {
       );
 
       if (statusCode !== 200) {
+        await body.dump();
         fastify.log.warn({ statusCode, q }, 'Photon returned non-200');
         return reply.code(502).send({ error: 'Geocoder upstream error' });
       }
@@ -102,6 +103,7 @@ export async function geocodeRoute(fastify) {
       );
 
       if (statusCode !== 200) {
+        await body.dump();
         fastify.log.warn({ statusCode, lat, lon }, 'Photon reverse returned non-200');
         return reply.code(502).send({ error: 'Geocoder upstream error' });
       }
