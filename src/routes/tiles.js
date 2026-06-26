@@ -12,8 +12,15 @@ import { existsSync } from 'node:fs';
 const TILES_DIR = process.env.TILES_DIR || resolve('data/tiles');
 
 export async function tilesRoute(fastify) {
-  // GET /tiles/:filename — serve PMTiles with range request support
-  fastify.get('/:filename', async (request, reply) => {
+  // GET + HEAD /tiles/:filename — serve PMTiles with range request support.
+  // Single route handling both methods avoids FST_ERR_DUPLICATED_ROUTE:
+  // Fastify auto-registers a HEAD for every GET, so a separate fastify.head()
+  // on the same path collides. The HEAD branch (MapLibre file-size discovery)
+  // returns headers only — no body stream.
+  fastify.route({
+  method: ['GET', 'HEAD'],
+  url: '/:filename',
+  handler: async (request, reply) => {
     const { filename } = request.params;
 
     // Security: prevent path traversal
@@ -30,6 +37,17 @@ export async function tilesRoute(fastify) {
     const rangeHeader = request.headers.range;
     const stat = await import('node:fs/promises').then(fs => fs.stat(filePath));
     const fileSize = stat.size;
+
+    // HEAD — return file-size headers only (MapLibre size discovery), no body.
+    if (request.method === 'HEAD') {
+      reply
+        .header('Content-Type', 'application/octet-stream')
+        .header('Content-Length', fileSize)
+        .header('Accept-Ranges', 'bytes')
+        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+        .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+      return reply.send();
+    }
 
     // If no Range header, return metadata about the file
     if (!rangeHeader) {
@@ -77,31 +95,6 @@ export async function tilesRoute(fastify) {
     } finally {
       await fd.close();
     }
-  });
-
-  // HEAD /tiles/:filename — for MapLibre to discover file size
-  fastify.head('/:filename', async (request, reply) => {
-    const { filename } = request.params;
-
-    if (filename.includes('..') || filename.includes('/')) {
-      return reply.code(400).send({ error: 'Invalid filename' });
-    }
-
-    const filePath = join(TILES_DIR, filename);
-
-    if (!existsSync(filePath)) {
-      return reply.code(404).send({ error: 'Tile file not found' });
-    }
-
-    const stat = await import('node:fs/promises').then(fs => fs.stat(filePath));
-
-    reply
-      .header('Content-Type', 'application/octet-stream')
-      .header('Content-Length', stat.size)
-      .header('Accept-Ranges', 'bytes')
-      .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-      .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
-
-    return reply.send();
+  },
   });
 }

@@ -7,3 +7,4 @@ data/photon-index/
 data/version.json
 .env
 *.log
+logs/
