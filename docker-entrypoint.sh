@@ -17,11 +17,15 @@ TILES_MAXZOOM="${TILES_MAXZOOM:-15}"
 if [ -n "$TILES_BUILD_DATE" ] && [ ! -f "$TILES_DIR/$TILES_FILE" ]; then
   echo "[seed] $TILES_DIR/$TILES_FILE missing — extracting from build.protomaps.com/$TILES_BUILD_DATE.pmtiles"
   mkdir -p "$TILES_DIR"
-  pmtiles extract "https://build.protomaps.com/$TILES_BUILD_DATE.pmtiles" \
+  if pmtiles extract "https://build.protomaps.com/$TILES_BUILD_DATE.pmtiles" \
     "$TILES_DIR/$TILES_FILE" \
     --bbox="$TILES_BBOX" \
-    --maxzoom="$TILES_MAXZOOM"
-  echo "[seed] extract complete: $(ls -la "$TILES_DIR/$TILES_FILE")"
+    --maxzoom="$TILES_MAXZOOM"; then
+    echo "[seed] extract complete: $(ls -la "$TILES_DIR/$TILES_FILE")"
+  else
+    echo "[seed] EXTRACT FAILED — booting without tiles (ready probe reports degraded); partial file removed"
+    rm -f "$TILES_DIR/$TILES_FILE"
+  fi
 else
   echo "[seed] tiles present or TILES_BUILD_DATE unset — skipping seed"
 fi
