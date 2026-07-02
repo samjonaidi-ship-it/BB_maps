@@ -6,7 +6,8 @@
 # bumps are an env change (TILES_BUILD_DATE) + volume file removal or a new
 # filename. Skipped entirely when the tile file already exists or the env
 # is unset (local dev with ./data mounted keeps working unchanged).
-set -e
+# Seed is BEST-EFFORT: a transient extract failure must not crash-loop the
+# service — /health/ready reports tiles:false and the next restart retries.
 
 TILES_DIR="${TILES_DIR:-/data/tiles}"
 TILES_FILE="${TILES_FILE:-bay-area.pmtiles}"

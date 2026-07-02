@@ -14,7 +14,7 @@ FROM node:20-slim
 WORKDIR /app
 
 # Install wget for healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=pmtiles /tmp/pmtiles/pmtiles /usr/local/bin/pmtiles
