@@ -38,13 +38,13 @@ services:
   # --- Photon Geocoder (OSM-based, Bay Area extract) ---
   # Uses Mapstack's pre-built Photon image with auto-download
   photon:
-    image: codingkiwi/mapstack-photon:latest
+    image: rtuszik/photon-docker:2.3 # pinned; mapstack-photon needs a valkey companion (Railway incident 2026-07-02). Prod currently uses PHOTON_URL=https://photon.komoot.io (interim — self-host needs a ~25GB volume for the REGION=us prebuilt index)
     environment:
       # Download Bay Area extract on first boot (~500MB)
-      - PHOTON_COUNTRY=us
+      - REGION=us
       - PHOTON_DOWNLOAD_URL=${PHOTON_DOWNLOAD_URL:-}
     volumes:
-      - photon-data:/photon/photon_data
+      - photon-data:/photon/data
     ports:
       - "2322:2322"
     restart: unless-stopped
