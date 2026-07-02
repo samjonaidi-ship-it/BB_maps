@@ -16,17 +16,21 @@ export async function fontsRoute(fastify) {
   fastify.get('/:fontstack/:range', async (request, reply) => {
     const { fontstack, range } = request.params;
 
-    // Security: prevent path traversal
-    if (fontstack.includes('..') || range.includes('..')) {
-      return reply.code(400).send({ error: 'Invalid path' });
-    }
-
-    // Normalize fontstack (URL-encoded spaces, commas for combined stacks)
-    const normalizedStack = decodeURIComponent(fontstack).replace(/,\s*/g, ',');
+    // Params arrive already URL-decoded by the router. The old extra
+    // decodeURIComponent here (audit fix) both 500'd on literal '%' in a
+    // fontstack and re-opened traversal via double-encoding (%252e%252e →
+    // '..' AFTER the check below had already passed).
+    const normalizedStack = fontstack.replace(/,\s*/g, ',');
 
     // For combined font stacks (e.g., "Noto Sans Regular,Arial Unicode MS Regular"),
     // use the first font in the stack
     const primaryFont = normalizedStack.split(',')[0].trim();
+
+    // Security: validate the FINAL path components (post-normalization)
+    if (primaryFont.includes('..') || primaryFont.includes('/') || primaryFont.includes('\\')
+      || range.includes('..') || range.includes('/') || range.includes('\\')) {
+      return reply.code(400).send({ error: 'Invalid path' });
+    }
 
     const rangeName = range.replace(/\.pbf$/, '');
     const filePath = join(FONTS_DIR, primaryFont, `${rangeName}.pbf`);
