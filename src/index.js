@@ -10,6 +10,7 @@ import { fontsRoute } from './routes/fonts.js';
 import { spritesRoute } from './routes/sprites.js';
 import { adminRoute, registerCountingHook } from './routes/admin.js';
 import { healthRoute } from './routes/health.js';
+import { assetsRoute } from './routes/assets.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -45,6 +46,7 @@ await app.register(satelliteRoute, { prefix: '/satellite' });
 await app.register(stylesRoute, { prefix: '/styles' });
 await app.register(fontsRoute, { prefix: '/fonts' });
 await app.register(spritesRoute, { prefix: '/sprites' });
+await app.register(assetsRoute, { prefix: '/assets' });
 await app.register(adminRoute, { prefix: '/admin' });
 await app.register(healthRoute);
 
