@@ -16,19 +16,30 @@ const PHOTON_URL = process.env.PHOTON_URL || 'http://photon:2322';
 const BAY_AREA_BBOX = '-122.52,36.95,-121.73,37.82';
 
 export async function geocodeRoute(fastify) {
-  // GET /geocode?q=...&bbox=...&limit=5&lang=en
+  // GET /geocode?q=...&bbox=...&limit=5&lang=en&osm_tag=key:value[,key:value]
   fastify.get('/', async (request, reply) => {
-    const { q, bbox, limit = '5', lang = 'en', lat, lon } = request.query;
+    const { q, bbox, limit = '5', lang = 'en', lat, lon, osm_tag } = request.query;
 
     if (!q || q.trim().length < 2) {
       return reply.code(400).send({ error: 'Query "q" must be at least 2 characters' });
     }
 
+    const requestedLimit = Math.min(parseInt(limit, 10) || 5, 20);
     const params = new URLSearchParams({
       q: q.trim(),
-      limit: String(Math.min(parseInt(limit, 10) || 5, 20)),
+      // Over-fetch a little so the post-dedup below can still fill the
+      // requested count (P3 autocomplete polish).
+      limit: String(Math.min(requestedLimit * 2, 20)),
       lang,
     });
+
+    // P3: Photon osm_tag filter passthrough (e.g. osm_tag=place,building:yes,
+    // or negative filters like osm_tag=!highway). Photon accepts repeated
+    // osm_tag params — comma-separate to send several.
+    if (osm_tag) {
+      String(osm_tag).split(',').map(t => t.trim()).filter(Boolean)
+        .forEach(t => params.append('osm_tag', t));
+    }
 
     // Add bounding box for geographic bias (bbox=minLon,minLat,maxLon,maxLat)
     const effectiveBbox = bbox || BAY_AREA_BBOX;
@@ -58,7 +69,7 @@ export async function geocodeRoute(fastify) {
       const raw = await body.json();
 
       // Transform Photon GeoJSON into our simplified response shape
-      const results = (raw.features || []).map(f => ({
+      const mapped = (raw.features || []).map(f => ({
         displayName: formatDisplayName(f.properties),
         street: f.properties.street || null,
         houseNumber: f.properties.housenumber || null,
@@ -71,6 +82,17 @@ export async function geocodeRoute(fastify) {
         type: f.properties.type || f.properties.osm_value || null,
         osmId: f.properties.osm_id || null,
       }));
+
+      // P3 de-dup: Photon often returns the same address as several OSM
+      // objects (house node + building way). Keep the first per displayName
+      // + ~11m coordinate cell, then cap to the requested count.
+      const seen = new Set();
+      const results = mapped.filter(r => {
+        const key = `${r.displayName}|${r.lat?.toFixed(4)},${r.lon?.toFixed(4)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, requestedLimit);
 
       reply
         .header('Cache-Control', 'public, max-age=300')

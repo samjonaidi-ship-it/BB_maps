@@ -59,9 +59,17 @@ if [ ! -f "$ASSETS_DIR/fonts.tar" ]; then
     IFS="$OLD_IFS"
     # Sprites route serves flat names — copy the v4 set to the dir root.
     cp "$SRC"/sprites/v4/* "$SPRITES_DIR/" 2>/dev/null
-    (cd "$FONTS_DIR" && tar -cf "$ASSETS_DIR/fonts.tar" .)
-    (cd "$SPRITES_DIR" && tar -cf "$ASSETS_DIR/sprites.tar" .)
-    echo "[seed] assets complete: $(ls -la "$ASSETS_DIR")"
+    # Sentinel check (audit fix): if the upstream repo layout changes, the
+    # copies above fail SILENTLY — creating tars from empty dirs would then
+    # freeze the broken state forever (the fonts.tar guard never re-runs the
+    # seed). Only tar when the expected content actually landed.
+    if [ -f "$FONTS_DIR/Noto Sans Regular/0-255.pbf" ] && [ -f "$SPRITES_DIR/light.json" ]; then
+      (cd "$FONTS_DIR" && tar -cf "$ASSETS_DIR/fonts.tar" .)
+      (cd "$SPRITES_DIR" && tar -cf "$ASSETS_DIR/sprites.tar" .)
+      echo "[seed] assets complete: $(ls -la "$ASSETS_DIR")"
+    else
+      echo "[seed] ASSETS SEED INCOMPLETE — expected files missing (upstream layout change?); tars not created, will retry next boot"
+    fi
   else
     echo "[seed] ASSETS SEED FAILED — fonts/sprites/packs stay empty until next restart"
     rm -f "$ASSETS_DIR/fonts.tar" "$ASSETS_DIR/sprites.tar"

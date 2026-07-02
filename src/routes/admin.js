@@ -19,6 +19,8 @@ const counters = {
   fonts: 0,
   sprites: 0,
   styles: 0,
+  route: 0,
+  assets: 0,
   startedAt: new Date().toISOString(),
 };
 
@@ -36,6 +38,8 @@ export function registerCountingHook(rootApp) {
     else if (path.startsWith('/fonts')) counters.fonts++;
     else if (path.startsWith('/sprites')) counters.sprites++;
     else if (path.startsWith('/styles')) counters.styles++;
+    else if (path.startsWith('/route')) counters.route++;
+    else if (path.startsWith('/assets')) counters.assets++;
     done();
   });
 }
@@ -61,7 +65,9 @@ export async function adminRoute(fastify) {
     const authHeader = request.headers.authorization;
     const adminKey = process.env.ADMIN_API_KEY;
 
-    if (adminKey && authHeader !== `Bearer ${adminKey}`) {
+    // FAIL CLOSED (2026-07-02 audit): with no ADMIN_API_KEY configured this
+    // write was open on the public domain. No key = no admin writes.
+    if (!adminKey || authHeader !== `Bearer ${adminKey}`) {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
 
@@ -96,7 +102,8 @@ export async function adminRoute(fastify) {
     const authHeader = request.headers.authorization;
     const adminKey = process.env.ADMIN_API_KEY;
 
-    if (adminKey && authHeader !== `Bearer ${adminKey}`) {
+    // FAIL CLOSED (2026-07-02 audit) — see /admin/version.
+    if (!adminKey || authHeader !== `Bearer ${adminKey}`) {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
 
@@ -106,6 +113,8 @@ export async function adminRoute(fastify) {
     counters.fonts = 0;
     counters.sprites = 0;
     counters.styles = 0;
+    counters.route = 0;
+    counters.assets = 0;
     counters.startedAt = new Date().toISOString();
     resetSatelliteUsage();
 

@@ -25,6 +25,9 @@ const cache = new Map(); // key → { at, payload }
 function parseLatLng(value) {
   if (typeof value !== 'string') return null;
   const [latStr, lngStr] = value.split(',');
+  // Audit fix: Number('') === 0, so '37.24,' parsed as lng 0 (Null Island)
+  // instead of a 400 — empty/whitespace segments are invalid.
+  if (!latStr?.trim() || !lngStr?.trim()) return null;
   const lat = Number(latStr);
   const lng = Number(lngStr);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
