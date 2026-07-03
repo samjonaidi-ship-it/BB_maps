@@ -5,7 +5,6 @@
  * MapLibre GL JS sends range requests; we read the corresponding byte range
  * from the .pmtiles file and return it with proper caching headers.
  */
-import { open } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 
@@ -76,25 +75,25 @@ export async function tilesRoute(fastify) {
       return reply.code(416).send({ error: 'Range not satisfiable' });
     }
 
-    const contentLength = end - start + 1;
-    const fd = await open(filePath, 'r');
-    try {
-      const buffer = Buffer.alloc(contentLength);
-      await fd.read(buffer, 0, contentLength, start);
-
-      reply
-        .code(206)
-        .header('Content-Type', 'application/octet-stream')
-        .header('Content-Range', `bytes ${start}-${end}/${fileSize}`)
-        .header('Content-Length', contentLength)
-        .header('Accept-Ranges', 'bytes')
-        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-        .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
-
-      return reply.send(buffer);
-    } finally {
-      await fd.close();
-    }
+    // Cap a single range to 16MB (audit 2026-07-03 F10): an open-ended
+    // `bytes=0-` yields the whole ~60MB file, and a burst of parallel such
+    // ranges could allocate >1GB of heap. pmtiles reads are small; clients
+    // that want more re-request. Stream (createReadStream) instead of a full
+    // Buffer.alloc so we never materialize the whole slice, and so a short OS
+    // read can't serve a zero-padded tail as a correct-looking 206.
+    const MAX_RANGE = 16 * 1024 * 1024;
+    const cappedEnd = Math.min(end, start + MAX_RANGE - 1);
+    const cappedLen = cappedEnd - start + 1;
+    const { createReadStream } = await import('node:fs');
+    reply
+      .code(206)
+      .header('Content-Type', 'application/octet-stream')
+      .header('Content-Range', `bytes ${start}-${cappedEnd}/${fileSize}`)
+      .header('Content-Length', cappedLen)
+      .header('Accept-Ranges', 'bytes')
+      .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+      .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+    return reply.send(createReadStream(filePath, { start, end: cappedEnd }));
   },
   });
 }

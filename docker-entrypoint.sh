@@ -21,14 +21,24 @@ TILES_MAXZOOM="${TILES_MAXZOOM:-15}"
 if [ -n "$TILES_BUILD_DATE" ] && [ ! -f "$TILES_DIR/$TILES_FILE" ]; then
   echo "[seed] $TILES_DIR/$TILES_FILE missing — extracting from build.protomaps.com/$TILES_BUILD_DATE.pmtiles"
   mkdir -p "$TILES_DIR"
+  # ATOMIC SEED (audit 2026-07-03): extract to a .partial then mv into place.
+  # Extracting straight to the final path meant a mid-extract kill (Railway
+  # deploy cutover / OOM — a ~125MB network extract is a long window) left a
+  # TRUNCATED file at the final path; the next boot's `[ ! -f ]` sees it, skips
+  # re-seeding FOREVER, and every client (online + pack) gets corrupt tiles
+  # while /health/ready still reports tiles:true. mv on the same filesystem is
+  # atomic, so a partial .partial can never masquerade as a complete file.
+  TMP_TILE="$TILES_DIR/$TILES_FILE.partial"
+  rm -f "$TMP_TILE"
   if pmtiles extract "https://build.protomaps.com/$TILES_BUILD_DATE.pmtiles" \
-    "$TILES_DIR/$TILES_FILE" \
+    "$TMP_TILE" \
     --bbox="$TILES_BBOX" \
     --maxzoom="$TILES_MAXZOOM"; then
+    mv -f "$TMP_TILE" "$TILES_DIR/$TILES_FILE"
     echo "[seed] extract complete: $(ls -la "$TILES_DIR/$TILES_FILE")"
   else
     echo "[seed] EXTRACT FAILED — booting without tiles (ready probe reports degraded); partial file removed"
-    rm -f "$TILES_DIR/$TILES_FILE"
+    rm -f "$TMP_TILE"
   fi
 else
   echo "[seed] tiles present or TILES_BUILD_DATE unset — skipping seed"
