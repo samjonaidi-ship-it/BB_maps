@@ -13,7 +13,11 @@ import { request as httpRequest } from 'undici';
 const PHOTON_URL = process.env.PHOTON_URL || 'http://photon:2322';
 
 // Bay Area bounding box (default restriction for relevance)
-const BAY_AREA_BBOX = '-122.52,36.95,-121.73,37.82';
+// Widened 2026-07-03 (audit): the old tight Bay-Area box excluded 6 of 63
+// active BB properties (La Selva Beach/Watsonville ~36.9N, east edge). This
+// NorCal box matches the Bridge GEO_FALLBACK_BBOX so Photon can resolve every
+// jobsite. Photon treats bbox as a HARD filter, so it must cover all sites.
+const BAY_AREA_BBOX = '-123.6,36.0,-120.0,39.5';
 
 export async function geocodeRoute(fastify) {
   // GET /geocode?q=...&bbox=...&limit=5&lang=en&osm_tag=key:value[,key:value]
