@@ -37,25 +37,55 @@ export async function tilesRoute(fastify) {
     const stat = await import('node:fs/promises').then(fs => fs.stat(filePath));
     const fileSize = stat.size;
 
+    // Validator (audit 2026-07-03 E): size + mtime uniquely identify a tile
+    // build, so a re-seed (new file) changes the ETag. This lets clients 304 an
+    // unchanged full GET AND — via If-Range — detect that a partially-downloaded
+    // pack's underlying file changed mid-transfer, so resumed ranges don't stitch
+    // stale + fresh bytes into a corrupt pmtiles.
+    const etag = `"${fileSize}-${Math.floor(stat.mtimeMs)}"`;
+    const lastModified = new Date(stat.mtimeMs).toUTCString();
+    const CACHE = 'public, max-age=86400, stale-while-revalidate=604800';
+    const EXPOSE = 'Content-Range, Content-Length, Accept-Ranges, ETag';
+
     // HEAD — return file-size headers only (MapLibre size discovery), no body.
     if (request.method === 'HEAD') {
       reply
         .header('Content-Type', 'application/octet-stream')
         .header('Content-Length', fileSize)
         .header('Accept-Ranges', 'bytes')
-        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-        .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+        .header('ETag', etag)
+        .header('Last-Modified', lastModified)
+        .header('Cache-Control', CACHE)
+        .header('Access-Control-Expose-Headers', EXPOSE);
       return reply.send();
     }
 
-    // If no Range header, return metadata about the file
-    if (!rangeHeader) {
+    // Unchanged full entity → 304 (client already has this exact build).
+    if (!rangeHeader && request.headers['if-none-match'] === etag) {
+      return reply
+        .code(304)
+        .header('ETag', etag)
+        .header('Cache-Control', CACHE)
+        .send();
+    }
+
+    // If-Range mismatch (audit E): the client holds a range from an OLDER file
+    // build. Serving a 206 would splice stale + fresh bytes. Per RFC 7233 a
+    // failed If-Range must return the WHOLE current entity (200), so drop the
+    // range and fall through to a full send.
+    const ifRange = request.headers['if-range'];
+    const rangeInvalidatedByBuild = rangeHeader && ifRange && ifRange !== etag;
+
+    // If no Range header (or If-Range invalidated it), return the full file.
+    if (!rangeHeader || rangeInvalidatedByBuild) {
       reply
         .header('Content-Type', 'application/octet-stream')
         .header('Content-Length', fileSize)
         .header('Accept-Ranges', 'bytes')
-        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-        .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+        .header('ETag', etag)
+        .header('Last-Modified', lastModified)
+        .header('Cache-Control', CACHE)
+        .header('Access-Control-Expose-Headers', EXPOSE);
 
       const { createReadStream } = await import('node:fs');
       return reply.send(createReadStream(filePath));
@@ -91,8 +121,10 @@ export async function tilesRoute(fastify) {
       .header('Content-Range', `bytes ${start}-${cappedEnd}/${fileSize}`)
       .header('Content-Length', cappedLen)
       .header('Accept-Ranges', 'bytes')
-      .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
-      .header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+      .header('ETag', etag)
+      .header('Last-Modified', lastModified)
+      .header('Cache-Control', CACHE)
+      .header('Access-Control-Expose-Headers', EXPOSE);
     return reply.send(createReadStream(filePath, { start, end: cappedEnd }));
   },
   });
