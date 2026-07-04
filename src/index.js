@@ -32,8 +32,13 @@ await app.register(cors, {
   methods: ['GET', 'HEAD', 'OPTIONS'],
 });
 
+// Rate limit keys on request.ip, which (trustProxy: true) now reflects the
+// per-crew X-Forwarded-For the CalExp5 proxy forwards (audit 2026-07-03 B) —
+// so the whole fleet no longer shares one bucket behind the single egress IP.
+// Raised 200→600/min because a single vector map view legitimately fires many
+// pmtiles range requests (each counts once); still bounds per-crew abuse.
 await app.register(rateLimit, {
-  max: parseInt(process.env.RATE_LIMIT_MAX || '200', 10),
+  max: parseInt(process.env.RATE_LIMIT_MAX || '600', 10),
   timeWindow: '1 minute',
 });
 
