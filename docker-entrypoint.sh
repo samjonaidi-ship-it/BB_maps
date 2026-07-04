@@ -1,5 +1,16 @@
 #!/bin/sh
-# BB_Maps | docker-entrypoint.sh | v1.2.0 | 2026-07-03 | BB
+# BB_Maps | docker-entrypoint.sh | v1.3.0 | 2026-07-04 | BB
+# v1.3.0: TILES_BBOX widened to greater NorCal. The old tight box
+#         (-122.52,36.95,-121.73,37.82) cut tile DATA off east of
+#         Gilroy/Morgan Hill and south of Watsonville — crew on the BB fallback
+#         map saw a blank void over real jobsites (property pins draw, but no
+#         tiles under them). The seed now RE-EXTRACTS whenever the bbox OR the
+#         build date changes (recorded in .tiles-seed), so a coverage change
+#         self-applies on the next deploy — no manual volume-file delete. When a
+#         tile file already exists the re-extract runs in the BACKGROUND: the
+#         atomic .partial->mv keeps the OLD pack serving until the new one lands,
+#         so a large multi-minute extract can never block node's boot / trip the
+#         Railway healthcheck. A fresh volume (no file) still extracts blocking.
 # v1.2.0: write data/version.json from TILES_BUILD_DATE after seeding so
 #         /admin/version reflects real tile builds (was a dead-man's switch —
 #         a re-seed never propagated to clients' checkForUpdate). Audit E.
@@ -7,53 +18,72 @@
 #         (fonts.tar / sprites.tar) from the protomaps/basemaps-assets repo —
 #         /fonts, /sprites, and /assets served 404s before this because the
 #         volume dirs were empty. Best-effort, skipped when already present.
-# Self-seeding boot: on a fresh volume, extract the Bay Area vector tiles
-# straight from the Protomaps daily build (HTTP range reads — only the bbox
-# subset transfers, ~125MB). Reproducible, no artifact shipping: version
-# bumps are an env change (TILES_BUILD_DATE) + volume file removal or a new
-# filename. Skipped entirely when the tile file already exists or the env
-# is unset (local dev with ./data mounted keeps working unchanged).
-# Seed is BEST-EFFORT: a transient extract failure must not crash-loop the
-# service — /health/ready reports tiles:false and the next restart retries.
+# Self-seeding boot: extract the vector tiles straight from the Protomaps daily
+# build (HTTP range reads — only the bbox subset transfers). Reproducible, no
+# artifact shipping. Seed is BEST-EFFORT: a transient extract failure must not
+# crash-loop the service — /health/ready reports tiles:false and the next
+# restart retries.
 
 TILES_DIR="${TILES_DIR:-/data/tiles}"
 TILES_FILE="${TILES_FILE:-bay-area.pmtiles}"
-TILES_BBOX="${TILES_BBOX:--122.52,36.95,-121.73,37.82}"
+# Greater-NorCal coverage: peninsula + coast -> Salinas / Monterey Bay (S), past
+# Gilroy / Hollister (E), inner East Bay — Fremont / Livermore / Oakland (N).
+# ~3x the old tight Bay-Area box. Override via the TILES_BBOX env if the service
+# footprint grows further; a change here re-extracts automatically on deploy.
+TILES_BBOX="${TILES_BBOX:--122.6,36.4,-121.2,37.95}"
 TILES_MAXZOOM="${TILES_MAXZOOM:-15}"
+# Records the (bbox|build-date) that produced the current tile file, so a change
+# to either self-triggers a re-extract without a manual volume-file delete.
+SEED_MARKER="$TILES_DIR/.tiles-seed"
 
-if [ -n "$TILES_BUILD_DATE" ] && [ ! -f "$TILES_DIR/$TILES_FILE" ]; then
-  echo "[seed] $TILES_DIR/$TILES_FILE missing — extracting from build.protomaps.com/$TILES_BUILD_DATE.pmtiles"
+# Extract the bbox subset of the Protomaps daily build to a .partial, then mv
+# atomically into place, and record the seed key that produced it.
+extract_tiles() {
   mkdir -p "$TILES_DIR"
-  # ATOMIC SEED (audit 2026-07-03): extract to a .partial then mv into place.
-  # Extracting straight to the final path meant a mid-extract kill (Railway
-  # deploy cutover / OOM — a ~125MB network extract is a long window) left a
-  # TRUNCATED file at the final path; the next boot's `[ ! -f ]` sees it, skips
-  # re-seeding FOREVER, and every client (online + pack) gets corrupt tiles
-  # while /health/ready still reports tiles:true. mv on the same filesystem is
-  # atomic, so a partial .partial can never masquerade as a complete file.
   TMP_TILE="$TILES_DIR/$TILES_FILE.partial"
   rm -f "$TMP_TILE"
   if pmtiles extract "https://build.protomaps.com/$TILES_BUILD_DATE.pmtiles" \
-    "$TMP_TILE" \
-    --bbox="$TILES_BBOX" \
-    --maxzoom="$TILES_MAXZOOM"; then
+    "$TMP_TILE" --bbox="$TILES_BBOX" --maxzoom="$TILES_MAXZOOM"; then
     mv -f "$TMP_TILE" "$TILES_DIR/$TILES_FILE"
-    echo "[seed] extract complete: $(ls -la "$TILES_DIR/$TILES_FILE")"
+    printf '%s' "$TILES_BBOX|$TILES_BUILD_DATE" > "$SEED_MARKER"
+    echo "[seed] extract complete (bbox=$TILES_BBOX): $(ls -la "$TILES_DIR/$TILES_FILE")"
   else
-    echo "[seed] EXTRACT FAILED — booting without tiles (ready probe reports degraded); partial file removed"
+    echo "[seed] EXTRACT FAILED — keeping existing tiles (if any); partial removed"
     rm -f "$TMP_TILE"
   fi
+}
+
+SEED_KEY="$TILES_BBOX|$TILES_BUILD_DATE"
+RECORDED_KEY=""
+[ -f "$SEED_MARKER" ] && RECORDED_KEY=$(cat "$SEED_MARKER" 2>/dev/null)
+NEED_TILES=false
+[ ! -f "$TILES_DIR/$TILES_FILE" ] && NEED_TILES=true
+[ "$RECORDED_KEY" != "$SEED_KEY" ] && NEED_TILES=true
+
+if [ -n "$TILES_BUILD_DATE" ] && [ "$NEED_TILES" = true ]; then
+  if [ -f "$TILES_DIR/$TILES_FILE" ]; then
+    # Existing tiles keep serving during the re-extract (atomic swap) → run it in
+    # the BACKGROUND so a large multi-minute extract can't block node's boot.
+    echo "[seed] seed key changed ($RECORDED_KEY -> $SEED_KEY) — re-extracting in BACKGROUND; current tiles serve meanwhile"
+    extract_tiles &
+  else
+    # Fresh volume: nothing to serve, so extract blocking before node starts.
+    echo "[seed] no tile file — extracting (blocking) from build.protomaps.com/$TILES_BUILD_DATE.pmtiles"
+    extract_tiles
+  fi
 else
-  echo "[seed] tiles present or TILES_BUILD_DATE unset — skipping seed"
+  echo "[seed] tiles present + seed key unchanged, or TILES_BUILD_DATE unset — skipping tile seed"
 fi
 
 # ── Version manifest (audit 2026-07-03 E) ───────────────────────────────
 # CalExp5's checkForUpdate polls /admin/version, but nothing wrote version.json,
-# so a tile re-seed (bump TILES_BUILD_DATE + remove the volume file) was
-# invisible to clients — stale offline packs never re-downloaded. Derive the
-# manifest deterministically from TILES_BUILD_DATE so a build bump propagates
-# the moment the new tiles land. Rewritten only when the recorded version drifts
-# from TILES_BUILD_DATE (idempotent across restarts).
+# so a tile re-seed was invisible to clients — stale offline packs never
+# re-downloaded. Derive the manifest deterministically from TILES_BUILD_DATE so
+# a build bump propagates. Rewritten only when the recorded version drifts from
+# TILES_BUILD_DATE (idempotent across restarts). NOTE: a bbox-only widen keeps
+# the same version — ONLINE clients pick up the new tiles automatically via the
+# size+mtime ETag / If-Range; to push the wider pack to existing OFFLINE-pack
+# users, bump TILES_BUILD_DATE too.
 VERSION_FILE="${VERSION_FILE:-/data/version.json}"
 if [ -n "$TILES_BUILD_DATE" ] && [ -f "$TILES_DIR/$TILES_FILE" ]; then
   RECORDED=""
