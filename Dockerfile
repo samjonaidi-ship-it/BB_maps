@@ -28,6 +28,11 @@ RUN mkdir -p /data/tiles /data/styles /data/fonts /data/sprites
 
 ENV NODE_ENV=production
 ENV PORT=8080
+# Keep the version manifest on the persistent volume so the entrypoint's writer
+# and admin.js's reader agree on Railway (no docker-compose there). Without this
+# admin.js defaulted to /app/data/version.json (ephemeral, wiped each deploy),
+# so /admin/version always reported 0.0.0 — the dead-man's-switch (audit E).
+ENV VERSION_FILE=/data/version.json
 
 EXPOSE 8080
 

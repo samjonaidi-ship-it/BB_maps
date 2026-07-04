@@ -1,5 +1,8 @@
 #!/bin/sh
-# BB_Maps | docker-entrypoint.sh | v1.1.0 | 2026-07-02 | BB
+# BB_Maps | docker-entrypoint.sh | v1.2.0 | 2026-07-03 | BB
+# v1.2.0: write data/version.json from TILES_BUILD_DATE after seeding so
+#         /admin/version reflects real tile builds (was a dead-man's switch —
+#         a re-seed never propagated to clients' checkForUpdate). Audit E.
 # v1.1.0: also self-seed fonts, sprites, and the offline-pack tars
 #         (fonts.tar / sprites.tar) from the protomaps/basemaps-assets repo —
 #         /fonts, /sprites, and /assets served 404s before this because the
@@ -42,6 +45,36 @@ if [ -n "$TILES_BUILD_DATE" ] && [ ! -f "$TILES_DIR/$TILES_FILE" ]; then
   fi
 else
   echo "[seed] tiles present or TILES_BUILD_DATE unset — skipping seed"
+fi
+
+# ── Version manifest (audit 2026-07-03 E) ───────────────────────────────
+# CalExp5's checkForUpdate polls /admin/version, but nothing wrote version.json,
+# so a tile re-seed (bump TILES_BUILD_DATE + remove the volume file) was
+# invisible to clients — stale offline packs never re-downloaded. Derive the
+# manifest deterministically from TILES_BUILD_DATE so a build bump propagates
+# the moment the new tiles land. Rewritten only when the recorded version drifts
+# from TILES_BUILD_DATE (idempotent across restarts).
+VERSION_FILE="${VERSION_FILE:-/data/version.json}"
+if [ -n "$TILES_BUILD_DATE" ] && [ -f "$TILES_DIR/$TILES_FILE" ]; then
+  RECORDED=""
+  [ -f "$VERSION_FILE" ] && RECORDED=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" | head -1)
+  if [ "$RECORDED" != "$TILES_BUILD_DATE" ]; then
+    TILE_BYTES=$(wc -c < "$TILES_DIR/$TILES_FILE" 2>/dev/null | tr -d ' ')
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    mkdir -p "$(dirname "$VERSION_FILE")"
+    cat > "$VERSION_FILE" <<VJSON
+{
+  "version": "$TILES_BUILD_DATE",
+  "updatedAt": "$NOW",
+  "tiles": {
+    "$TILES_FILE": { "bytes": ${TILE_BYTES:-0}, "maxzoom": $TILES_MAXZOOM }
+  }
+}
+VJSON
+    echo "[version] wrote manifest version=$TILES_BUILD_DATE bytes=${TILE_BYTES:-0}"
+  else
+    echo "[version] manifest already at $TILES_BUILD_DATE — no change"
+  fi
 fi
 
 # ── Fonts / sprites / offline-pack tars ─────────────────────────────────
