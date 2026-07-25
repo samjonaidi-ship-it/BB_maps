@@ -8,3 +8,6 @@ data/version.json
 .env
 *.log
 logs/
+
+# Vendor pmtiles binaries (74 MB, re-downloadable)
+tools/
