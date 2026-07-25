@@ -1,0 +1,5 @@
+# Merged PRs that audit-unlanded-work.mjs would otherwise flag as orphaned.
+# Format: <pr-number> # <why it is resolved>
+# Only add a line here once you have VERIFIED the content actually reached main.
+
+1 # "Ship 13c — BB_Maps self-hosted map service". Merged init -> base on 2026-06-26; both branches were later deleted and main was re-rooted, so the merge commit b3c3ba4f is not an ancestor of origin/main. VERIFIED 2026-07-24 with git ls-tree: all 18 files the PR touched are present in origin/main. Benign history artifact, no missing work.
