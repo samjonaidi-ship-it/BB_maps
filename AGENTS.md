@@ -1,0 +1,109 @@
+<!-- BB-AGENT-CONTRACT v1.0 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.0 | 2026-08-21 | BB
+
+**Every agent working in this repo follows this file — Claude Code, Devin (cloud
+AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
+self-contained: a cloud agent cannot read anything on Sam's machine, so a rule
+that lives only in `~/.claude/CLAUDE.md` or `C:\Users\samjo\...` does not exist as
+far as it is concerned. Do not replace any rule below with a pointer to an
+off-repo file.
+
+## 1. Never push to `main`
+
+`main` is protected on the active repos: a direct push is rejected with
+`GH006 Protected branch update failed`. Even where protection is not yet on,
+treat `main` as read-only. All work reaches `main` through a pull request.
+
+## 2. One branch per task
+
+- Claude / Codex: `agent/<task>` — kebab-case, task-named, not dated, not versioned.
+- Devin: its own `devin/<id>-<slug>` naming is fine. Everything else here still applies.
+- Rebase onto `origin/main` at the start of a session and before pushing.
+- Reason about `origin/main`, never a stale local `main`.
+
+## 3. Open a PR and let CI decide
+
+Push the branch, open a PR, wait for the required checks. A red or **inconclusive**
+build is not a pass — `cancelled`, `skipped`, `neutral` and `null` all mean nothing
+was proven. Do not merge on them.
+
+## 4. Who merges
+
+**Routine changes may auto-merge on green.** Auto-merge is enabled on the managed
+repos; it waits for the required checks and merges only if they pass.
+
+**STOP and hand to Sam** — do not merge, say what you changed and why it is here —
+when the diff touches any of:
+
+- authentication, authorization, permission or role logic
+- database migrations, or anything that writes schema
+- branch protection, CI config, or the workflow files themselves
+- credentials, secrets, tokens, `.env`, or key handling
+- deploy configuration (Railway, Dockerfile, start commands)
+- money: billing, invoicing, payroll, QuickBooks posting
+
+If you are unsure whether a change is routine, it is not. Ask.
+
+## 5. Clean up after yourself
+
+When a feature is done: delete the branch (local and origin) and remove its
+worktree. A merged branch left behind is a trap — the next agent resumes on dead
+code. Note that a **squash-merged** branch does not read as merged by ancestry;
+check the PR state, not just `merge-base`.
+
+## 6. Never bypass a gate
+
+No `--no-verify`. No disabling a lint to make it pass. No committing a suppression
+to silence a check. If a gate blocks you, the gate is the message — fix the cause
+or explain why it is wrong. (If a pre-push hook blocks a branch *deletion*, that
+is a hook bug: a deletion pushes no content. Delete the ref via the API instead
+and report the bug.)
+
+## 7. VERSION_MATRIX discipline
+
+Where the repo has `docs/VERSION_MATRIX.md`, add your entry at the top and
+**renumber above the highest version already present** — never reuse a number.
+Two agents picking the same version merges clean and silently, because both sides
+write an identical heading. Rebase before choosing.
+
+## 8. Prove it
+
+"Tested" means output. Run the repo's test command and quote the result, including
+the real exit code — a piped command reports the pipe's status, not the program's.
+"I wrote it but did not run it" is an acceptable thing to say. "It works" without
+evidence is not.
+
+## 9. If you run on Sam's desktop, stay out of the primary checkout
+
+This applies to any agent with local filesystem access — desktop Devin, Codex,
+Claude Code. Several agents share one clone.
+
+- The repo's **primary checkout** (e.g. `C:\Users\samjo\Desktop\<Repo>`) stays on
+  `main`, read-only. **Never `git checkout`/`switch` a branch there.** Another
+  agent is reading those files right now; switching the branch under it changes
+  its working tree mid-task.
+- Do your work in a **worktree**: `git worktree add .claude/worktrees/<task> -b agent/<task>`.
+  Keep worktrees under `.claude/worktrees/` — sibling directories like
+  `<Repo>-myfeature` work but hide from every cleanup sweep.
+- Remove your worktree when the branch is merged. Do not remove one that is
+  dirty or on an unmerged branch: that is someone's unfinished work.
+
+Claude Code enforces the read-only rule with a PreToolUse hook. **Other agents
+have no such hook — for them this section is the only thing standing between two
+agents and a corrupted working tree.**
+
+## 10. Shared files are collision points
+
+Anything every task touches — a root layout, a shared store, an index/registry, a
+changelog — will conflict when two agents edit it at once. Rebase immediately
+before touching one, and keep the edit as small as possible.
+
+<!-- END BB-AGENT-CONTRACT -->
+
+---
+
+## BB_maps — repo-specific notes
+
+_Nothing repo-specific recorded yet. Add project facts, shared-file
+collision points, and any local override BELOW this line — the block above
+is managed and will be replaced wholesale on the next contract update._
