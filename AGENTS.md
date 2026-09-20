@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.2 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.1 | 2026-08-21 | BB
+<!-- BB-AGENT-CONTRACT v1.3 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.3 | 2026-09-20 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -118,6 +118,30 @@ fails your PR and branch protection will not merge it.
 Anything every task touches — a root layout, a shared store, an index/registry, a
 changelog — will conflict when two agents edit it at once. Rebase immediately
 before touching one, and keep the edit as small as possible.
+
+## 12. Before writing new logic, search for what already exists
+
+The same helper gets written again in several repos when nobody looks first (a
+phone-number normalizer, a money-to-cents converter, a distance formula). Before you
+write a non-trivial function, parser, formatter or client, spend a minute looking:
+
+- **In this repo:** grep for the verbs and nouns of what you are about to write, and
+  read the `utils/` / `lib/` neighbours of the file you are editing.
+- **Local agents on Sam's machine only** (Claude Code, Devin Desktop, dsh, Codex on
+  the desktop) also have a by-meaning search over the docs and decisions. Ask it in a
+  plain sentence; it needs Ollama running and says so if it is not:
+  `node C:\Users\samjo\Desktop\Claude\TOOLS\embed-index.mjs search "<what you are looking for>"`.
+  `node C:\Users\samjo\Desktop\Claude\TOOLS\doc-graph.mjs find <words>` is the literal
+  (keyword) lookup over the same docs.
+- **Cloud agents** cannot reach that index — it lives on Sam's machine — so do the
+  in-repo grep and say in the PR body that the cross-repo search was not available.
+
+**A search hit is a lead, not proof.** The semantic index is measured and modest: on a
+14-query check it put the right document in the top five for 8 of 14. A miss does not
+mean nothing exists, and a hit does not mean it fits — open it and read it before you
+reuse it or claim it does not exist. If you find an existing helper, use or extend it;
+if you write a new one anyway, say in the PR body what you searched and why the
+existing one did not fit.
 
 <!-- END BB-AGENT-CONTRACT -->
 
