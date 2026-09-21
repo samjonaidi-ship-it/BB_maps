@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.3 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.3 | 2026-09-20 | BB
+<!-- BB-AGENT-CONTRACT v1.4 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.4 | 2026-09-21 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -133,11 +133,16 @@ write a non-trivial function, parser, formatter or client, spend a minute lookin
   `node C:\Users\samjo\Desktop\Claude\TOOLS\embed-index.mjs search "<what you are looking for>"`.
   `node C:\Users\samjo\Desktop\Claude\TOOLS\doc-graph.mjs find <words>` is the literal
   (keyword) lookup over the same docs.
-- **Cloud agents** cannot reach that index — it lives on Sam's machine — so do the
+  For CODE rather than docs, the function index searches the top-level functions of
+  every repo by meaning — describe what the function does, not what it might be called:
+  `node C:\Users\samjo\Desktop\Claude\TOOLS\code-index.mjs search "<what the function does>"`.
+- **Cloud agents** cannot reach those indexes — they live on Sam's machine — so do the
   in-repo grep and say in the PR body that the cross-repo search was not available.
 
-**A search hit is a lead, not proof.** The semantic index is measured and modest: on a
-14-query check it put the right document in the top five for 8 of 14. A miss does not
+**A search hit is a lead, not proof.** Both indexes are measured and modest: on a
+14-query check the doc index put the right document in the top five for 8 of 14; on a
+12-query check the function index put the right function in the top five for 7 of 12,
+and it sees only functions declared at the top level of a file. A miss does not
 mean nothing exists, and a hit does not mean it fits — open it and read it before you
 reuse it or claim it does not exist. If you find an existing helper, use or extend it;
 if you write a new one anyway, say in the PR body what you searched and why the
