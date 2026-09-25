@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.4 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.4 | 2026-09-21 | BB
+<!-- BB-AGENT-CONTRACT v1.5 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.5 | 2026-09-24 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -127,8 +127,17 @@ write a non-trivial function, parser, formatter or client, spend a minute lookin
 
 - **In this repo:** grep for the verbs and nouns of what you are about to write, and
   read the `utils/` / `lib/` neighbours of the file you are editing.
+- **The second brain, first.** Claude Code has the `mcp__brain-search__brain_search`
+  tool (plus `brain_read` and `brain_inspect` to go deeper) loaded automatically —
+  it is one call over docs, global memory, session digests, merged PRs, the wiki
+  and code, ranked by meaning, not keyword. Codex reaches the same server through
+  its own MCP config. Call it FIRST for "have we built / decided / hit this
+  before" — before grepping this repo, before `embed-index`/`doc-graph`, before
+  writing anything non-trivial. If the MCP tool is unavailable, the CLI fallback
+  is `node C:\Users\samjo\Desktop\Claude\TOOLS\brain.mjs search "<question>"`.
 - **Local agents on Sam's machine only** (Claude Code, Devin Desktop, dsh, Codex on
-  the desktop) also have a by-meaning search over the docs and decisions. Ask it in a
+  the desktop) also have a by-meaning search over the docs and decisions, as a
+  secondary tool once the brain has been checked. Ask it in a
   plain sentence; it needs Ollama running and says so if it is not:
   `node C:\Users\samjo\Desktop\Claude\TOOLS\embed-index.mjs search "<what you are looking for>"`.
   `node C:\Users\samjo\Desktop\Claude\TOOLS\doc-graph.mjs find <words>` is the literal
@@ -136,8 +145,12 @@ write a non-trivial function, parser, formatter or client, spend a minute lookin
   For CODE rather than docs, the function index searches the top-level functions of
   every repo by meaning — describe what the function does, not what it might be called:
   `node C:\Users\samjo\Desktop\Claude\TOOLS\code-index.mjs search "<what the function does>"`.
-- **Cloud agents** cannot reach those indexes — they live on Sam's machine — so do the
-  in-repo grep and say in the PR body that the cross-repo search was not available.
+- **Cloud agents** (cloud Devin included) cannot reach the brain or those indexes —
+  they all live on Sam's machine — so do the in-repo grep and say in the PR body
+  that the cross-repo search was not available.
+
+**A brain hit is a lead, not proof, same as the other indexes below.** Open the
+source and re-check it before relying on it or repeating it as fact.
 
 **A search hit is a lead, not proof.** Both indexes are measured and modest: on a
 14-query check the doc index put the right document in the top five for 8 of 14; on a
