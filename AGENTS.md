@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.5 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.5 | 2026-09-24 | BB
+<!-- BB-AGENT-CONTRACT v1.6 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.6 | 2026-09-26 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -68,6 +68,10 @@ review trail. That body is the changelog entry — `docs/VERSION_MATRIX.md` and
 the changelog from merged PRs with `node C:\Users\samjo\Desktop\Claude\TOOLS\changelog.mjs`.
 Do not bump a "matrix version"; `package.json` carries the only version that runs.
 
+Every PR body also carries a **"Searched first:"** line naming what §12's brain
+search found and whether it was reused — a cloud agent instead states that the
+cross-repo search was unavailable and that it grepped this repo in-repo.
+
 ## 8. Prove it
 
 "Tested" means output. Run the repo's test command and quote the result, including
@@ -120,6 +124,12 @@ changelog — will conflict when two agents edit it at once. Rebase immediately
 before touching one, and keep the edit as small as possible.
 
 ## 12. Before writing new logic, search for what already exists
+
+**Every task starts with one brain search** — the main agent and every subagent
+it spawns, on any AI tool (Claude, Codex, Devin) — before the first grep, Explore
+call, or edit. This is not optional preference: a PreToolUse gate on Claude Code
+blocks a subagent's first Write/Edit/Grep/Glob once if no brain search preceded
+it, and the block fires at most once per agent.
 
 The same helper gets written again in several repos when nobody looks first (a
 phone-number normalizer, a money-to-cents converter, a distance formula). Before you
