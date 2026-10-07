@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.9 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.9 | 2026-10-06 | BB
+<!-- BB-AGENT-CONTRACT v1.11 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.11 | 2026-10-06 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -32,10 +32,19 @@ was proven. Do not merge on them.
 **The agent that opens a PR owns it until it is merged** — red CI, conflicts,
 Devin threads and re-arming are all yours, never handed back to Sam. Auto-merge
 is enabled on the managed repos; it waits for the required checks and merges
-only if they pass. Auth, CI, secrets and deploy changes are no exception: at
-`BB_PACE=normal` they also wait for the risky-path review; at `BB_PACE=fast`
-that review is skipped (only migrations are still reviewed) and they merge on
-green CI, with the lookback audit as the control.
+only if they pass. Auth, CI, secrets, deploy and money changes are no
+exception, but two different reviews apply and the pace decides both:
+
+- **The CI gate** (`Risky path review`, driven by `scripts/risky-paths.json`): at
+  `BB_PACE=normal` it stays red on a risky diff until a human adds the
+  `human-reviewed` label. **Agents never add that label**, so at normal pace a
+  risky PR waits for Sam — it is parked on him, not stuck; say so. At
+  `BB_PACE=fast` this job is skipped for every path, migrations included, and the
+  PR merges on green CI with the lookback audit as the control.
+- **The local pre-push reviewer** (`bb-review` on Sam's machine, not CI): at
+  `BB_PACE=fast` it still reviews a push that touches migrations, and nothing
+  else. It reviews the diff; it does not apply or verify the migration — that is
+  the rule below.
 
 **STOP and hand to Sam** — do not merge, say what you changed and why it is here —
 only for:
@@ -45,12 +54,23 @@ only for:
 - **running a migration against production**: writing the migration file is
   yours; applying it to the prod database is Sam's. Find out how this repo runs
   its migrations before you arm:
-  - **run by hand** (BMB: `migrations/run-NNN-*.mjs`): the PR cannot be armed
-    until it has run — stage it for Sam, then confirm it in `schema_migrations`
-    and arm with `landed --arm --migration-applied <sha8,…>`;
+  - **run by hand, with a ledger** (BMB: `migrations/run-NNN-*.mjs`, recorded in
+    `schema_migrations`): the PR cannot be armed until it has run — stage it for
+    Sam, confirm its row in `schema_migrations`, then arm with
+    `landed --arm --migration-applied <sha8,…>`;
+  - **run by hand, with no ledger** (BB_Scan_OpenAI-v4: `db/apply-schema.mjs`
+    re-applies every idempotent `db/schema*.sql` and records nothing): Sam runs
+    the applier; you confirm with a read-only query that the new table or column
+    exists in prod, and only then arm. There is no row to check, so the query is
+    the proof — put its output in the PR body;
   - **run by the app itself on deploy or boot** (ControlTower: the BFF applies
     every new `bff/migrations/*.sql` at startup): **merging IS running it** — do
-    not arm; Sam merges that PR. `landed --arm` refuses both kinds.
+    not arm; Sam merges that PR.
+
+  What `landed --arm` does with each kind: the first, it refuses until you pass
+  `--migration-applied` with the applied migrations' sha8s (that flag is the
+  only way through, and only after Sam has run them); the third, it refuses
+  outright, with no flag. It cannot see the second — that check is yours.
 
   Until then the PR is parked on Sam, not stuck — say so.
 
@@ -203,6 +223,18 @@ before coding starts.
   One push = one more review round.
 - **No round limit.** Keep fixing — one commit per round — until Devin has no
   open findings and CI is green. The PR is yours to land, not Sam's.
+- **Arm only with `landed --arm`, never a bare `gh pr merge --auto`.** CI's
+  devin-gate blocks only red findings; `landed --arm` waits for Devin's review
+  of the current head and refuses while ANY Devin thread on it is open,
+  whatever its colour. Arming any other way lets auto-merge land the PR with
+  findings still open.
+- **Armed is not the same as reviewed.** When Devin cannot vouch — it never
+  showed up, skipped the head, was still running past the wait, ended in a
+  non-pass state, or its threads could not be read — `landed --arm` arms anyway
+  and prints a warning containing `arming WITHOUT` (`… a Devin review`, `… its
+  verdict`, `… checking its findings`). When any line says `arming WITHOUT`, say
+  in the PR body that Devin did not vouch for this head and why; never report
+  the PR as reviewed.
 - **Before pushing a fix round to a PR whose auto-merge is armed, disarm it
   first** (`gh pr merge <n> --disable-auto`), then re-arm once the round is
   pushed. GitHub merges whatever head is green: a fix pushed after it merged is
