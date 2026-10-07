@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.11 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.11 | 2026-10-06 | BB
+<!-- BB-AGENT-CONTRACT v1.12 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.12 | 2026-10-06 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -59,7 +59,9 @@ only for:
     Sam, confirm its row in `schema_migrations`, then arm with
     `landed --arm --migration-applied <sha8,…>`;
   - **run by hand, with no ledger** (BB_Scan_OpenAI-v4: `db/apply-schema.mjs`
-    re-applies every idempotent `db/schema*.sql` and records nothing): Sam runs
+    re-applies the idempotent files in its fixed `SCHEMA_FILES` list and records
+    nothing — a new `db/schema-*.sql` must also be added to that list, or the
+    applier never runs it): Sam runs
     the applier; you confirm with a read-only query that the new table or column
     exists in prod, and only then arm. There is no row to check, so the query is
     the proof — put its output in the PR body;
@@ -224,10 +226,14 @@ before coding starts.
 - **No round limit.** Keep fixing — one commit per round — until Devin has no
   open findings and CI is green. The PR is yours to land, not Sam's.
 - **Arm only with `landed --arm`, never a bare `gh pr merge --auto`.** CI's
-  devin-gate blocks only red findings; `landed --arm` waits for Devin's review
+  devin-gate fails on an open red finding, on a failed `bb-review` status, and —
+  only on a PR that changes the canonical guardrails — on any open Devin thread;
+  elsewhere a yellow or 🔍 note never fails it, and after 8 minutes with no
+  Devin verdict it passes without one. `landed --arm` waits for Devin's review
   of the current head and refuses while ANY Devin thread on it is open,
   whatever its colour. Arming any other way lets auto-merge land the PR with
-  findings still open.
+  findings still open. A **cloud agent** has no `landed`: leave the PR unarmed,
+  say so in the PR body, and a local agent or Sam arms it.
 - **Armed is not the same as reviewed.** When Devin cannot vouch — it never
   showed up, skipped the head, was still running past the wait, ended in a
   non-pass state, or its threads could not be read — `landed --arm` arms anyway
