@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.12 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.12 | 2026-10-06 | BB
+<!-- BB-AGENT-CONTRACT v1.13 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.13 | 2026-10-09 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -75,6 +75,15 @@ only for:
   outright, with no flag. It cannot see the second — that check is yours.
 
   Until then the PR is parked on Sam, not stuck — say so.
+
+**Held for Sam.** Separately from the two cases above, Sam can hold any PR: a
+title that starts with uppercase `HOLD`, or carries `[HOLD` anywhere (e.g.
+`… [HOLD — Sam merges]`), or the label `sams-merge`. A held PR: `landed --arm`
+refuses it (exit 5), the devin-gate check fails with "held for Sam: title HOLD /
+label sams-merge" (and re-runs the moment the title or that label changes), and
+an overnight driver turns its auto-merge off and leaves it. Only Sam lifts a hold
+— an agent never edits the title or the label to get past it. It too is parked
+on Sam, not stuck — say so.
 
 If you are unsure whether a change pays people, posts to QuickBooks, or runs on
 the production database, it does. Ask.
@@ -224,14 +233,20 @@ before coding starts.
   only the line it named), add a test for each red finding, then push once.
   One push = one more review round.
 - **No round limit.** Keep fixing — one commit per round — until Devin has no
-  open findings and CI is green. The PR is yours to land, not Sam's.
+  open red findings and CI is green. The PR is yours to land, not Sam's. **Round 3+:
+  stop patching.** Write the full case table for the function(s) Devin keeps
+  flagging, rewrite each once against it, and if the session is long start a
+  clean one.
 - **Arm only with `landed --arm`, never a bare `gh pr merge --auto`.** CI's
   devin-gate fails on an open red finding, on a failed `bb-review` status, and —
   only on a PR that changes the canonical guardrails — on any open Devin thread;
   elsewhere a yellow or 🔍 note never fails it, and after 8 minutes with no
   Devin verdict it passes without one. `landed --arm` waits for Devin's review
-  of the current head and refuses while ANY Devin thread on it is open,
-  whatever its colour. Arming any other way lets auto-merge land the PR with
+  of the current head and refuses only while a RED finding (a 🔴 bug, or a `SEC_`
+  id) is open on it; on a PR that changes the canonical guardrails any open
+  thread refuses. A yellow or info note does not block: answer it with a reason
+  or a follow-up issue, then resolve the thread — never leave it silent
+  (`landed` prints each one). Arming any other way lets auto-merge land the PR with
   findings still open. A **cloud agent** has no `landed`: leave the PR unarmed,
   say so in the PR body, and a local agent or Sam arms it.
 - **Armed is not the same as reviewed.** When Devin cannot vouch — it never
