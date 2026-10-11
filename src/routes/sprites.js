@@ -36,7 +36,7 @@ export async function spritesRoute(fastify) {
 
     reply
       .header('Content-Type', contentType)
-      .header('Cache-Control', 'public, max-age=604800, immutable');
+      .header('Cache-Control', 'public, max-age=86400');
 
     return reply.send(buffer);
   });
