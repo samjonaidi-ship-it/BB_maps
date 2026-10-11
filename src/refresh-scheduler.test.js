@@ -171,6 +171,19 @@ test('refresh-maps.sh: republishing the same build bumps the version (BUILD.1, B
   assert.equal(run().build, '20261007');
 });
 
+test('refresh-maps.sh: auto mode never publishes a build older than the live one', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  const live = '{"version":"20261009","build":"20261009","updatedAt":"2026-10-09T09:00:00Z"}';
+  writeFileSync(join(data, 'version.json'), live);
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' }); // stub's newest is 20261007
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /not downgrading/);
+  assert.equal(readFileSync(join(data, 'version.json'), 'utf-8'), live);
+  // A pinned date may go back on purpose.
+  const pinned = spawnSync('sh', [SCRIPT], { env: { ...env, TILES_BUILD_DATE: '20261007' }, encoding: 'utf-8' });
+  assert.equal(pinned.status, 0, pinned.stdout + pinned.stderr);
+});
+
 test('refresh-maps.sh: a failure mid-swap restores EVERY piece of the old release', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
   const { data, env } = stubEnv(t, { extractFails: false });
   // Release A, already live.
@@ -220,6 +233,28 @@ test('refresh-maps.sh: a run killed mid-swap (.prev left behind) is restored by 
   assert.equal(readFileSync(join(data, 'fonts', 'x'), 'utf-8'), 'OLD');
   assert.equal(existsSync(join(data, 'sprites')), false, 'piece the killed run created is removed');
   assert.equal(existsSync(join(data, '.prev')), false);
+});
+
+test('refresh-maps.sh: an interrupted release that cannot be restored stops the run and keeps .prev', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  mkdirSync(join(data, 'fonts'), { recursive: true });
+  writeFileSync(join(data, 'fonts', 'x'), 'NEW');
+  mkdirSync(join(data, '.prev', 'fonts'), { recursive: true });
+  writeFileSync(join(data, '.prev', 'fonts', 'x'), 'OLD');
+  const realMv = spawnSync('sh', ['-c', 'command -v mv'], { encoding: 'utf-8' }).stdout.trim();
+  const bin = join(data, '..', 'bin');
+  writeFileSync(join(bin, 'mv'), `#!/bin/sh
+case "$*" in *.prev/fonts*) echo "stub mv: disk error" >&2; exit 1 ;; esac
+exec "${realMv}" "$@"
+`);
+  chmodSync(join(bin, 'mv'), 0o755);
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /could not restore the interrupted release/);
+  assert.doesNotMatch(r.stdout + r.stderr, /not found/);
+  assert.doesNotMatch(r.stdout, /build 2026/, 'no new build was started');
+  assert.equal(readFileSync(join(data, '.prev', 'fonts', 'x'), 'utf-8'), 'OLD', 'last good copy kept');
+  assert.equal(existsSync(join(data, 'version.json')), false);
 });
 
 // ── image / compose wiring: the routes must read where the release is written ──

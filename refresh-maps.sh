@@ -5,7 +5,9 @@
 #         kill; the release commits with one rename. A republish of the same
 #         build gets its own version (BUILD.1, BUILD.2 ...) so phones re-download
 #         a coverage change; the manifest carries "build" for the pinned check.
-#         version.json is parsed before it is published.
+#         version.json is parsed before it is published. A rollback that cannot
+#         restore a piece keeps .prev for the next run; the automatic path never
+#         publishes a build older than the live one.
 # One map release = tiles + fonts + sprites + offline-pack tars + version.json,
 # built together so phones never mix a new tile pack with old assets.
 #
@@ -65,16 +67,26 @@ live_of() {
 # the live files are exactly the previous release again.
 rollback() {
   [ -d "$PREV" ] || return 0
+  ok=true
   for name in $PIECES; do
     live=$(live_of "$name")
     if [ -e "$PREV/$name" ]; then
-      rm -rf "$live" && mv "$PREV/$name" "$live" || log "ROLLBACK could not restore $name"
+      if rm -rf "$live" && mv "$PREV/$name" "$live"; then :; else
+        log "ROLLBACK could not restore $name"; ok=false
+      fi
     elif [ -e "$PREV/$name.created" ]; then
-      rm -rf "$live"
+      if rm -rf "$live"; then rm -f "$PREV/$name.created"; else ok=false; fi
     fi
   done
-  rm -rf "$PREV"
-  log "rolled back - previous release restored"
+  # A piece that could not be restored still lives only in .prev: keep it, so
+  # the next run (or boot) retries instead of deleting the last good copy.
+  if [ "$ok" = true ]; then
+    rm -rf "$PREV"
+    log "rolled back - previous release restored"
+  else
+    log "ROLLBACK incomplete - kept $PREV for the next run to retry"
+    return 1
+  fi
 }
 
 mkdir -p "$DATA_DIR"
@@ -93,10 +105,8 @@ on_exit() {
 trap on_exit EXIT
 trap 'exit 1' INT TERM HUP
 
-# A run killed mid-swap (SIGKILL, power loss) left .prev behind: restore it.
-rm -rf "$PREV.done"
-if [ -d "$PREV" ]; then log "found an interrupted release - restoring the previous one"; rollback; fi
-
+# Defined before its first use below: sh has no hoisting, and an undefined
+# `fail` prints "not found" and carries on.
 fail() {
   if [ "$SWAPPING" = true ]; then
     log "FAILED mid-swap: $* - restoring the previous release"
@@ -105,6 +115,15 @@ fail() {
   fi
   exit 1
 }
+
+# A run killed mid-swap (SIGKILL, power loss) left .prev behind: restore it.
+# If that restore fails, stop - a new swap would move live pieces into the .prev
+# that still holds the only copy of the last good release.
+rm -rf "$PREV.done"
+if [ -d "$PREV" ]; then
+  log "found an interrupted release - restoring the previous one"
+  rollback || fail "could not restore the interrupted release"
+fi
 
 # ── 1. which build ──────────────────────────────────────────────────────
 BUILD=""
@@ -160,6 +179,14 @@ SPRITES_TAR_BYTES=$(wc -c < "$STAGE/assets/sprites.tar" | tr -d ' ')
 # new to phones, which compare version strings: BUILD, then BUILD.1, BUILD.2...
 PREV_VERSION=""
 [ -f "$VERSION_FILE" ] && PREV_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" | head -1)
+# Never step back to an older build on the automatic path (the lookback can land
+# on one when the newer days are unreachable). A pinned date may go back on purpose.
+PREV_BUILD=$(printf '%s' "$PREV_VERSION" | cut -c1-8)
+case "${TILES_BUILD_DATE:-auto}" in ""|auto)
+  case "$PREV_BUILD" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+    [ "$BUILD" -ge "$PREV_BUILD" ] || fail "build $BUILD is older than the live $PREV_BUILD - not downgrading" ;;
+  esac ;;
+esac
 case "$PREV_VERSION" in
   "$BUILD") VERSION="$BUILD.1" ;;
   "$BUILD".*)

@@ -35,6 +35,11 @@ done
 # A run killed mid-swap left .prev: refresh-maps.sh restores it first thing.
 [ -d "$DATA_DIR/.prev" ] && missing="$missing $DATA_DIR/.prev(interrupted)"
 
+# At boot nothing in THIS container is refreshing yet, so a lock on the volume is
+# left by a killed run (OOM, hard stop). Clear it, or the restore above would wait
+# out the 3 h stale-lock window with a half-swapped release live.
+rmdir "$DATA_DIR/.refresh.lock" 2>/dev/null && echo "[seed] cleared a lock left by a killed refresh"
+
 if [ -n "$missing" ]; then
   echo "[seed] missing:$missing"
   echo "[seed] fresh or incomplete volume - building the first map release (blocking)"
