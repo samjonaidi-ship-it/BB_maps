@@ -13,17 +13,18 @@ services:
       - STYLES_DIR=/data/styles
       - FONTS_DIR=/data/fonts
       - SPRITES_DIR=/data/sprites
+      - ASSETS_DIR=/data/assets
+      - DATA_DIR=/data
       - VERSION_FILE=/data/version.json
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - PUBLIC_URL=${PUBLIC_URL:-}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=production
+    # ONE volume at /data, like Railway: refresh-maps.sh swaps fonts/ and sprites/
+    # by rename, and a mount point under /data cannot be renamed (Devin, PR #11).
     volumes:
-      - tiles-data:/data/tiles
-      - styles-data:/data/styles
-      - fonts-data:/data/fonts
-      - sprites-data:/data/sprites
+      - maps-data:/data
     depends_on:
       photon:
         condition: service_healthy
@@ -60,13 +61,7 @@ services:
           memory: 768M
 
 volumes:
-  tiles-data:
-    driver: local
-  styles-data:
-    driver: local
-  fonts-data:
-    driver: local
-  sprites-data:
+  maps-data:
     driver: local
   photon-data:
     driver: local
