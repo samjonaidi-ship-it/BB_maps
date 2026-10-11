@@ -1,5 +1,6 @@
 // BB_Maps | src/refresh-scheduler.test.js | v1.3.0 | 2026-10-10 | BB
-// v1.3.0: stubs log their calls; a refused downgrade downloads nothing.
+// v1.3.0: stubs log their calls; a refused downgrade downloads nothing; a
+//         version published during staging is re-checked (Devin, PR #17).
 // v1.2.0 (Devin, PR #11 reds 18 + 20): version.json going live is the commit
 //         point; Compose keeps styles on their own volume.
 // v1.1.0 (Devin round 1): republish versioning, pinned-by-build, mid-swap and
@@ -108,6 +109,8 @@ function stubEnv(t, { extractFails }) {
   // Both stubs log each call to bin/calls, so a test can prove nothing was downloaded.
   writeFileSync(join(bin, 'pmtiles'), `#!/bin/sh
 echo "pmtiles $1" >> "$(dirname "$0")/calls"
+# STUB_PUBLISH_DURING_EXTRACT: POST /admin/version landing while the run stages.
+[ "$1" = extract ] && [ -n "\${STUB_PUBLISH_DURING_EXTRACT:-}" ] && printf '%s' "$STUB_PUBLISH_DURING_EXTRACT" > "$DATA_DIR/version.json"
 case "$1" in
   extract) ${extractFails ? 'echo "stub: upstream 404" >&2; exit 1' : 'head -c 2048 /dev/zero > "$3"'} ;;
   show) exit 0 ;;
@@ -191,6 +194,18 @@ test('refresh-maps.sh: auto mode never publishes a build older than the live one
   // A pinned date may go back on purpose.
   const pinned = spawnSync('sh', [SCRIPT], { env: { ...env, TILES_BUILD_DATE: '20261007' }, encoding: 'utf-8' });
   assert.equal(pinned.status, 0, pinned.stdout + pinned.stderr);
+});
+
+test('refresh-maps.sh: a newer version published during staging (/admin/version) is not overwritten', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  writeFileSync(join(data, 'version.json'), '{"version":"20261006","build":"20261006","updatedAt":"2026-10-06T09:00:00Z"}');
+  const newer = '{"version":"20261009","updatedAt":"2026-10-10T09:00:00Z"}';
+  // Passes the early check (20261007 >= 20261006); the admin write lands mid-extract.
+  const r = spawnSync('sh', [SCRIPT], { env: { ...env, STUB_PUBLISH_DURING_EXTRACT: newer }, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /older than the live 20261009 - not downgrading/);
+  assert.equal(readFileSync(join(data, 'version.json'), 'utf-8'), newer);
+  assert.equal(existsSync(join(data, 'tiles', 'bay-area.pmtiles')), false, 'nothing swapped in');
 });
 
 test('refresh-maps.sh: a failure mid-swap restores EVERY piece of the old release', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
