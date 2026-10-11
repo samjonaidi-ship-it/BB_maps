@@ -21,10 +21,13 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=production
-    # ONE volume at /data, like Railway: refresh-maps.sh swaps fonts/ and sprites/
-    # by rename, and a mount point under /data cannot be renamed (Devin, PR #11).
+    # ONE release volume at /data, like Railway: refresh-maps.sh swaps fonts/ and
+    # sprites/ by rename, and a mount point under /data cannot be renamed (Devin,
+    # PR #11). styles/ is the exception: the release never touches it, so it stays
+    # on its own pre-#11 volume and existing styles survive the upgrade.
     volumes:
       - maps-data:/data
+      - styles-data:/data/styles
     depends_on:
       photon:
         condition: service_healthy
@@ -62,6 +65,8 @@ services:
 
 volumes:
   maps-data:
+    driver: local
+  styles-data:
     driver: local
   photon-data:
     driver: local
