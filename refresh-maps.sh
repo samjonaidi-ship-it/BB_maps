@@ -67,7 +67,10 @@ case "${TILES_BUILD_DATE:-auto}" in
     i=0
     while [ "$i" -le "$REFRESH_LOOKBACK_DAYS" ]; do
       d=$(date -u -d "@$((TODAY_S - i * 86400))" +%Y%m%d) || fail "date arithmetic"
+      # Any failure (404 or a network blip) falls back a day: an older build is
+      # still a valid release, and the log shows which days were skipped.
       if wget -q --spider "$BUILD_BASE_URL/$d.pmtiles"; then BUILD="$d"; break; fi
+      log "build $d not reachable - trying the day before"
       i=$((i + 1))
     done
     [ -n "$BUILD" ] || fail "no Protomaps build in the last $REFRESH_LOOKBACK_DAYS days"

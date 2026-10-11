@@ -104,13 +104,13 @@ export function startRefreshScheduler({ log, script = resolve('refresh-maps.sh')
     const child = spawn('sh', [script], { stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', d => log.info(String(d).trim()));
     child.stderr.on('data', d => log.warn(String(d).trim()));
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       running = false;
       if (code === 0) {
         log.info('[refresh] map release published');
       } else {
         lastFailureAt = Date.now();
-        log.error(`[refresh] map release FAILED (exit ${code}) - live map unchanged, retry in 6 h`);
+        log.error(`[refresh] map release FAILED (${signal ? `killed by ${signal}` : `exit ${code}`}) - live map unchanged, retry in 6 h`);
       }
     });
     child.on('error', (err) => {
