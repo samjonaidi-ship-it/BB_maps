@@ -68,6 +68,7 @@ data/
 ├── styles/         ← MapLibre style JSON (dark.json, light.json)
 ├── fonts/          ← PBF glyph ranges (Noto Sans Regular/0-255.pbf)
 ├── sprites/        ← Sprite sheets (dark.png, dark.json, dark@2x.png)
+├── assets/         ← Offline-pack tars (fonts.tar, sprites.tar)
 └── version.json    ← Auto-generated version manifest
 ```
 
@@ -104,7 +105,14 @@ curl http://localhost:8080/satellite/14/6331/2621 --output tile.jpg
 
 Tiles, fonts, sprites and the offline-pack tars are one **release**, built
 together by `refresh-maps.sh` and published by writing `version.json` last.
-A failed build changes nothing that phones can see.
+A failed build changes nothing that phones can see: each live piece is kept in
+`/data/.prev` while the new one moves in, and any failure or kill puts every old
+piece back, `version.json` included. Everything lives on ONE volume at `/data`
+(Railway and Compose alike), so every swap is a rename.
+
+- **Version:** the Protomaps build date (`20261004`). Re-publishing the same build
+  (a coverage change, a manual run) gives `20261004.1`, `.2`, ... so phones still
+  see a new version; `build` in the manifest keeps the plain date.
 
 - **When:** first Sunday of each month, 2:00 AM Pacific (`src/refresh-scheduler.js`,
   checked every 15 min; a missed slot catches up, a failure retries after 6 h).

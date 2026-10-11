@@ -1,4 +1,6 @@
-// BB_Maps | src/refresh-scheduler.test.js | v1.0.0 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.test.js | v1.1.0 | 2026-10-10 | BB
+// v1.1.0 (Devin round 1): republish versioning, pinned-by-build, mid-swap and
+//         killed-run rollback, Dockerfile/compose /data wiring.
 // Monthly map release: isRefreshDue() against the PT schedule (first Sunday
 // 2:00 AM America/Los_Angeles), incl. the DST fall-back night and the evening-PT
 // hours when UTC is already in the next month. Then refresh-maps.sh itself, with
@@ -8,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isRefreshDue, firstSundayOfMonth, pacificParts } from './refresh-scheduler.js';
@@ -44,6 +46,12 @@ test('pinned build: due only when the live one differs', () => {
   assert.equal(due(m, '2026-10-10T12:00:00Z', { pinned: '20260701' }), false);
   assert.equal(due(m, '2026-10-10T12:00:00Z', { pinned: '20261005' }), true);
   assert.equal(due(m, '2026-10-10T12:00:00Z', { pinned: 'auto' }), true); // auto = monthly rule
+});
+
+test('pinned build vs a republished version (BUILD.N): compares "build", not "version"', () => {
+  const m = built('2026-10-08T09:00:00Z', { version: '20261007.1', build: '20261007' });
+  assert.equal(due(m, '2026-10-10T12:00:00Z', { pinned: '20261007' }), false);
+  assert.equal(due(m, '2026-10-10T12:00:00Z', { pinned: '20261008' }), true);
 });
 
 test('live today: the July release is overdue (October slot was Sun 10/4)', () => {
@@ -149,4 +157,90 @@ test('refresh-maps.sh: newest existing build, all pieces swapped in, version.jso
   assert.ok(existsSync(join(data, 'sprites', 'light.json')));
   assert.ok(existsSync(join(data, 'assets', 'fonts.tar')));
   assert.equal(existsSync(join(data, '.refresh.lock')), false);
+  assert.equal(existsSync(join(data, '.prev')), false, 'committed: no .prev left');
+});
+
+test('refresh-maps.sh: republishing the same build bumps the version (BUILD.1, BUILD.2)', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  const run = () => {
+    const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return JSON.parse(readFileSync(join(data, 'version.json'), 'utf-8'));
+  };
+  assert.deepEqual([run().version, run().version, run().version], ['20261007', '20261007.1', '20261007.2']);
+  assert.equal(run().build, '20261007');
+});
+
+test('refresh-maps.sh: a failure mid-swap restores EVERY piece of the old release', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  // Release A, already live.
+  const old = {
+    'version.json': '{"version":"20260701","updatedAt":"2026-07-04T01:27:22Z"}',
+    'tiles/bay-area.pmtiles': 'OLD-TILES',
+    'assets/fonts.tar': 'OLD-FONTS-TAR',
+    'assets/sprites.tar': 'OLD-SPRITES-TAR',
+    'fonts/Noto Sans Regular/0-255.pbf': 'OLD-FONT',
+    'sprites/light.json': 'OLD-SPRITE',
+  };
+  for (const [p, body] of Object.entries(old)) {
+    mkdirSync(join(data, p, '..'), { recursive: true });
+    writeFileSync(join(data, p), body);
+  }
+  // mv fails only when moving the staged tile file in: fonts, sprites and both
+  // tars are already swapped by then, so all four must come back.
+  const realMv = spawnSync('sh', ['-c', 'command -v mv'], { encoding: 'utf-8' }).stdout.trim();
+  const bin = join(data, '..', 'bin');
+  writeFileSync(join(bin, 'mv'), `#!/bin/sh
+case "$*" in *.staging*bay-area.pmtiles*) echo "stub mv: disk error" >&2; exit 1 ;; esac
+exec "${realMv}" "$@"
+`);
+  chmodSync(join(bin, 'mv'), 0o755);
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAILED mid-swap: tile swap/);
+  for (const [p, body] of Object.entries(old)) {
+    assert.equal(readFileSync(join(data, p), 'utf-8'), body, `${p} restored`);
+  }
+  assert.equal(existsSync(join(data, '.prev')), false, '.prev cleaned up');
+  assert.equal(existsSync(join(data, '.staging')), false);
+});
+
+test('refresh-maps.sh: a run killed mid-swap (.prev left behind) is restored by the next run', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: true });
+  // Killed after fonts moved to .prev and the new fonts moved in; version.json never swapped.
+  mkdirSync(join(data, 'fonts'), { recursive: true });
+  writeFileSync(join(data, 'fonts', 'x'), 'NEW');
+  mkdirSync(join(data, '.prev', 'fonts'), { recursive: true });
+  writeFileSync(join(data, '.prev', 'fonts', 'x'), 'OLD');
+  writeFileSync(join(data, '.prev', 'sprites.created'), '');
+  mkdirSync(join(data, 'sprites'));
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr); // extract stub fails afterwards
+  assert.match(r.stdout, /interrupted release/);
+  assert.equal(readFileSync(join(data, 'fonts', 'x'), 'utf-8'), 'OLD');
+  assert.equal(existsSync(join(data, 'sprites')), false, 'piece the killed run created is removed');
+  assert.equal(existsSync(join(data, '.prev')), false);
+});
+
+// ── image / compose wiring: the routes must read where the release is written ──
+test('Dockerfile sets every data path the routes read, all under /data', () => {
+  const docker = readFileSync(resolve('Dockerfile'), 'utf-8');
+  const envs = Object.fromEntries([...docker.matchAll(/\b([A-Z_]+(?:_DIR|_FILE))=(\S+)/g)].map(m => [m[1], m[2]]));
+  const routes = join(resolve('src'), 'routes');
+  const read = new Set();
+  for (const f of readdirSync(routes).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))) {
+    for (const m of readFileSync(join(routes, f), 'utf-8').matchAll(/process\.env\.([A-Z_]+(?:_DIR|_FILE))/g)) read.add(m[1]);
+  }
+  assert.ok(read.size >= 6, `found ${[...read]}`);
+  for (const name of read) {
+    assert.ok(envs[name], `Dockerfile has no ENV ${name} - the route falls back to /app/data`);
+    assert.match(envs[name], /^\/data\//, `${name}=${envs[name]} is not on the /data volume`);
+  }
+});
+
+test('docker-compose mounts ONE volume at /data and nothing beneath it', () => {
+  const compose = readFileSync(resolve('docker-compose.yml'), 'utf-8');
+  const svc = compose.split(/\n {2}photon:/)[0]; // bb-maps service block only
+  const mounts = [...svc.matchAll(/^\s+- [\w.-]+:(\/\S*)\s*$/gm)].map(m => m[1]);
+  assert.deepEqual(mounts, ['/data']);
 });

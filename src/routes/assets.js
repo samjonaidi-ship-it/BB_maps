@@ -5,7 +5,8 @@
  * `/api/maps/assets/sprites.tar` for the OPFS offline packs — this route did
  * not exist (found in the 2026-07-02 parity audit: the client contract was
  * written against it but the server never grew the endpoint). Serves whole
- * .tar files from ASSETS_DIR with the same caching posture as /tiles.
+ * .tar files from ASSETS_DIR. Not cached: refresh-maps.sh replaces them in
+ * place each month (Devin, PR #11).
  */
 import { join, resolve } from 'node:path';
 import { existsSync, createReadStream } from 'node:fs';
@@ -34,7 +35,9 @@ export async function assetsRoute(fastify) {
       reply
         .header('Content-Type', 'application/x-tar')
         .header('Content-Length', size)
-        .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        // no-cache: a monthly release replaces these files under the same URL;
+        // a day-long cache would hand a phone last month's tar for a new version.
+        .header('Cache-Control', 'public, no-cache');
 
       if (request.method === 'HEAD') return reply.send();
       return reply.send(createReadStream(filePath));

@@ -24,7 +24,7 @@ COPY docker-entrypoint.sh refresh-maps.sh ./
 RUN chmod +x docker-entrypoint.sh refresh-maps.sh /usr/local/bin/pmtiles
 
 # Create data directories
-RUN mkdir -p /data/tiles /data/styles /data/fonts /data/sprites
+RUN mkdir -p /data/tiles /data/styles /data/fonts /data/sprites /data/assets
 
 ENV NODE_ENV=production
 ENV PORT=8080
@@ -33,6 +33,10 @@ ENV PORT=8080
 # admin.js defaulted to /app/data/version.json (ephemeral, wiped each deploy),
 # so /admin/version always reported 0.0.0 — the dead-man's-switch (audit E).
 ENV VERSION_FILE=/data/version.json
+# Every route reads the same /data paths refresh-maps.sh writes. Without these the
+# routes fell back to /app/data (resolve('data/...')) and a bare image served 404s
+# for a release it had just built (Devin, PR #11). Railway sets the same values.
+ENV DATA_DIR=/data TILES_DIR=/data/tiles FONTS_DIR=/data/fonts SPRITES_DIR=/data/sprites ASSETS_DIR=/data/assets STYLES_DIR=/data/styles
 
 EXPOSE 8080
 

@@ -1,4 +1,4 @@
-// BB_Maps | src/refresh-scheduler.js | v1.0.1 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.js | v1.0.2 | 2026-10-10 | BB
 // Monthly map release. Every CHECK_MS it asks isRefreshDue(); when due it runs
 // refresh-maps.sh (tiles + fonts + sprites + version.json as one release).
 // Phones see the new version on their next daily check and re-download every
@@ -56,9 +56,11 @@ export function isRefreshDue({ manifest, now, pinned = '', bbox = DEFAULT_BBOX }
   if (!manifest?.version || manifest.version === '0.0.0') return { due: true, reason: 'no release yet' };
   if (manifest.bbox && manifest.bbox !== bbox) return { due: true, reason: `coverage changed (${manifest.bbox} -> ${bbox})` };
   if (pinned && pinned !== 'auto') {
-    return manifest.version === pinned
+    // A republish of a build is versioned BUILD.N; "build" is the Protomaps date.
+    const live = manifest.build ?? manifest.version;
+    return live === pinned
       ? { due: false, reason: `pinned to ${pinned}` }
-      : { due: true, reason: `pinned build ${pinned} differs from live ${manifest.version}` };
+      : { due: true, reason: `pinned build ${pinned} differs from live ${live}` };
   }
   const pt = pacificParts(now);
   const builtAt = Date.parse(manifest.updatedAt);
