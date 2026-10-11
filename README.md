@@ -100,6 +100,21 @@ curl "http://localhost:8080/geocode/reverse?lat=37.7749&lon=-122.4194"
 curl http://localhost:8080/satellite/14/6331/2621 --output tile.jpg
 ```
 
+## Map releases (automatic, monthly)
+
+Tiles, fonts, sprites and the offline-pack tars are one **release**, built
+together by `refresh-maps.sh` and published by writing `version.json` last.
+A failed build changes nothing that phones can see.
+
+- **When:** first Sunday of each month, 2:00 AM Pacific (`src/refresh-scheduler.js`,
+  checked every 15 min; a missed slot catches up, a failure retries after 6 h).
+  A fresh or incomplete volume is seeded at boot, before the server starts.
+- **Which build:** `TILES_BUILD_DATE` unset or `auto` = newest Protomaps build
+  (Protomaps keeps only about 6 daily builds). `YYYYMMDD` pins one build.
+- **Off switch:** `MAPS_AUTO_REFRESH=0`.
+- **Phones:** CalExp5 checks `/admin/version` daily and re-downloads every
+  installed pack on Wi-Fi when `version` changes.
+
 ## Environment Variables
 
 See `.env.example` for all available configuration options.

@@ -20,8 +20,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=pmtiles /tmp/pmtiles/pmtiles /usr/local/bin/pmtiles
 COPY package.json ./
 COPY src ./src
-COPY docker-entrypoint.sh ./
-RUN chmod +x docker-entrypoint.sh /usr/local/bin/pmtiles
+COPY docker-entrypoint.sh refresh-maps.sh ./
+RUN chmod +x docker-entrypoint.sh refresh-maps.sh /usr/local/bin/pmtiles
 
 # Create data directories
 RUN mkdir -p /data/tiles /data/styles /data/fonts /data/sprites

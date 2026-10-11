@@ -12,6 +12,7 @@ import { adminRoute, registerCountingHook } from './routes/admin.js';
 import { healthRoute } from './routes/health.js';
 import { assetsRoute } from './routes/assets.js';
 import { routeRoute } from './routes/route.js';
+import { startRefreshScheduler } from './refresh-scheduler.js';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -61,6 +62,8 @@ await app.register(healthRoute);
 try {
   await app.listen({ port: PORT, host: HOST });
   app.log.info(`BB_Maps listening on ${HOST}:${PORT}`);
+  // Monthly map release (tiles + fonts + sprites together) - refresh-scheduler.js
+  startRefreshScheduler({ log: app.log });
 } catch (err) {
   app.log.fatal(err);
   process.exit(1);
