@@ -314,6 +314,19 @@ test('refresh-maps.sh: a rollback that was already under way is finished, never 
   assert.equal(existsSync(join(data, '.prev')), false);
 });
 
+test('refresh-maps.sh: a rollback marker that cannot be written still restores every piece', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: true });
+  mkdirSync(join(data, 'fonts')); writeFileSync(join(data, 'fonts', 'x'), 'NEW');
+  mkdirSync(join(data, '.prev', 'fonts'), { recursive: true });
+  writeFileSync(join(data, '.prev', 'fonts', 'x'), 'OLD');
+  mkdirSync(join(data, '.prev', '.rollback')); // a directory: `: > .rollback` fails
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr); // extract stub fails afterwards
+  assert.match(r.stdout, /could not mark .* restoring anyway/);
+  assert.equal(readFileSync(join(data, 'fonts', 'x'), 'utf-8'), 'OLD');
+  assert.equal(existsSync(join(data, '.prev')), false);
+});
+
 // ── image / compose wiring: the routes must read where the release is written ──
 test('Dockerfile sets every data path the routes read, all under /data', () => {
   const docker = readFileSync(resolve('Dockerfile'), 'utf-8');

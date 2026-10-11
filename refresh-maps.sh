@@ -53,7 +53,9 @@ FONT_STACKS="Noto Sans Regular:Noto Sans Medium:Noto Sans Italic"
 STAGE="$DATA_DIR/.staging"
 LOCK="$DATA_DIR/.refresh.lock"
 PREV="$DATA_DIR/.prev"
-PIECES="fonts sprites fonts.tar sprites.tar tiles version.json"
+# Rollback order: version.json first, so phones stop being offered the new
+# version before any file under it moves (the swap installs it last).
+PIECES="version.json tiles sprites.tar fonts.tar sprites fonts"
 
 log() { echo "[refresh] $*"; }
 
@@ -74,8 +76,12 @@ live_of() {
 # read as a committed release (release_committed) - the next run finishes it.
 rollback() {
   [ -d "$PREV" ] || return 0
-  : > "$PREV/.rollback" || { log "ROLLBACK could not mark $PREV"; return 1; }
   ok=true
+  # A marker that cannot be written (full or read-only disk) must not stop the
+  # restore itself. version.json is restored first, so once it is back .prev no
+  # longer reads as committed even without the marker.
+  # `true`, not `:` - a failed redirect on a special builtin exits the shell.
+  true > "$PREV/.rollback" || log "WARNING: ROLLBACK could not mark $PREV - restoring anyway"
   for name in $PIECES; do
     live=$(live_of "$name")
     if [ -e "$PREV/$name" ]; then
@@ -278,7 +284,7 @@ install_piece() { # name staged-path
   if [ -e "$live" ]; then
     mv "$live" "$PREV/$1" || return 1
   else
-    : > "$PREV/$1.created" || return 1
+    true > "$PREV/$1.created" || return 1
   fi
   mv "$2" "$live"
 }
