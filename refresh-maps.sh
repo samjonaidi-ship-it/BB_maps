@@ -1,5 +1,9 @@
 #!/bin/sh
-# BB_Maps | refresh-maps.sh | v1.2.0 | 2026-10-10 | BB
+# BB_Maps | refresh-maps.sh | v1.3.0 | 2026-10-10 | BB
+# v1.3.0 (Devin, PR #11 red 20): the commit point is version.json going live,
+#         not the later .prev rename. A failure or kill after it keeps the new
+#         release (phones may already have its version) and the next run only
+#         clears .prev; a started rollback is marked so it is never misread.
 # v1.2.0 (Devin round 1): every replaced piece, version.json included, is kept
 #         in $DATA_DIR/.prev and ALL of them are restored on any failure or
 #         kill; the release commits with one rename. A republish of the same
@@ -17,8 +21,9 @@
 #   2. build everything in $DATA_DIR/.staging and verify it (tile file is a
 #      readable PMTiles archive over TILES_MIN_BYTES, font + sprite sentinels).
 #   3. swap each piece into place (the old one kept in .prev), write
-#      version.json LAST, then commit by renaming .prev away. Any failure or
-#      kill during the swap puts every old piece back, version.json included.
+#      version.json LAST - that is the commit. Any failure or kill before it
+#      puts every old piece back, version.json included; after it, the new
+#      release stands and .prev is only cleaned up.
 #
 # A failure at any step leaves the live files and version.json as they were,
 # so a phone can never be told "new version" while it would download the old
@@ -64,9 +69,12 @@ live_of() {
 }
 
 # Put back every piece this swap replaced (or remove what it newly created), so
-# the live files are exactly the previous release again.
+# the live files are exactly the previous release again. The .rollback marker
+# goes first: once a rollback has started, a half-restored .prev must never be
+# read as a committed release (release_committed) - the next run finishes it.
 rollback() {
   [ -d "$PREV" ] || return 0
+  : > "$PREV/.rollback" || { log "ROLLBACK could not mark $PREV"; return 1; }
   ok=true
   for name in $PIECES; do
     live=$(live_of "$name")
@@ -89,6 +97,36 @@ rollback() {
   fi
 }
 
+# The commit point is version.json going live (the last piece swapped). From
+# then on phones may already have read the new version, so it is never rolled
+# back: .prev still holding the old version.json while the live one exists
+# means the release committed and only its cleanup was cut short.
+release_committed() {
+  [ ! -e "$PREV/.rollback" ] && [ -e "$VERSION_FILE" ] \
+    && { [ -e "$PREV/version.json" ] || [ -e "$PREV/version.json.created" ]; }
+}
+
+# Drop the old release. One rename first, so a cleanup cut short never leaves a
+# .prev with some pieces missing for the next run to misread.
+finish_commit() {
+  if mv "$PREV" "$PREV.done"; then
+    rm -rf "$PREV.done"
+  else
+    log "WARNING: release is live but $PREV could not be cleared - the next run clears it"
+  fi
+}
+
+# After a failure or a kill: finish a committed release, roll back anything else.
+recover() {
+  [ -d "$PREV" ] || return 0
+  if release_committed; then
+    log "version.json is already live - keeping the new release"
+    finish_commit
+    return 0
+  fi
+  rollback
+}
+
 mkdir -p "$DATA_DIR"
 # One refresh at a time. A lock older than 3 h is a crashed run, not a live one.
 if [ -d "$LOCK" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +180 2>/dev/null)" ]; then
@@ -98,7 +136,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then log "another refresh is running - skipping"
 
 SWAPPING=false
 on_exit() {
-  [ "$SWAPPING" = true ] && rollback
+  [ "$SWAPPING" = true ] && recover
   rm -rf "$STAGE"
   rmdir "$LOCK" 2>/dev/null
 }
@@ -116,13 +154,20 @@ fail() {
   exit 1
 }
 
-# A run killed mid-swap (SIGKILL, power loss) left .prev behind: restore it.
-# If that restore fails, stop - a new swap would move live pieces into the .prev
+# A run killed mid-swap (SIGKILL, power loss) left .prev behind: restore it -
+# unless version.json had already gone live, then that release stands.
+# If a restore fails, stop - a new swap would move live pieces into the .prev
 # that still holds the only copy of the last good release.
 rm -rf "$PREV.done"
 if [ -d "$PREV" ]; then
-  log "found an interrupted release - restoring the previous one"
-  rollback || fail "could not restore the interrupted release"
+  if release_committed; then
+    log "found a committed release whose cleanup was cut short - clearing $PREV"
+    finish_commit
+    [ -d "$PREV" ] && fail "could not clear $PREV"
+  else
+    log "found an interrupted release - restoring the previous one"
+    rollback || fail "could not restore the interrupted release"
+  fi
 fi
 
 # ── 1. which build ──────────────────────────────────────────────────────
@@ -244,10 +289,10 @@ install_piece sprites.tar "$STAGE/assets/sprites.tar" || fail "sprites.tar swap"
 install_piece tiles "$STAGE/$TILES_FILE" || fail "tile swap"
 install_piece version.json "$STAGE/version.json" || fail "version.json publish"
 
-# Commit point: one rename. After it, nothing is rolled back.
-mv "$PREV" "$PREV.done" || fail "commit"
+# Commit point: version.json is live. Nothing after this line rolls back - a
+# failed cleanup only logs, and the next run clears .prev (release_committed).
 SWAPPING=false
-rm -rf "$PREV.done"
+finish_commit
 # Kept for the v1.3.0 entrypoint's bbox|date marker (harmless if unused).
 printf '%s' "$TILES_BBOX|$BUILD" > "$TILES_DIR/.tiles-seed"
 log "published version $VERSION (build $BUILD; tiles $TILE_BYTES B, fonts.tar $FONTS_TAR_BYTES B, sprites.tar $SPRITES_TAR_BYTES B)"

@@ -1,4 +1,6 @@
-// BB_Maps | src/refresh-scheduler.test.js | v1.1.0 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.test.js | v1.2.0 | 2026-10-10 | BB
+// v1.2.0 (Devin, PR #11 reds 18 + 20): version.json going live is the commit
+//         point; Compose keeps styles on their own volume.
 // v1.1.0 (Devin round 1): republish versioning, pinned-by-build, mid-swap and
 //         killed-run rollback, Dockerfile/compose /data wiring.
 // Monthly map release: isRefreshDue() against the PT schedule (first Sunday
@@ -257,6 +259,61 @@ exec "${realMv}" "$@"
   assert.equal(existsSync(join(data, 'version.json')), false);
 });
 
+// Devin, PR #11 red 20: once version.json is live, phones may already have the
+// new version - a later failure must never roll the files back under it.
+test('refresh-maps.sh: a failure AFTER version.json went live keeps the new release', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: false });
+  writeFileSync(join(data, 'version.json'), '{"version":"20260701","updatedAt":"2026-07-04T01:27:22Z"}');
+  mkdirSync(join(data, 'fonts')); writeFileSync(join(data, 'fonts', 'old'), 'OLD');
+  // Only the .prev cleanup rename fails.
+  const realMv = spawnSync('sh', ['-c', 'command -v mv'], { encoding: 'utf-8' }).stdout.trim();
+  const bin = join(data, '..', 'bin');
+  writeFileSync(join(bin, 'mv'), `#!/bin/sh
+case "$*" in *.prev*.prev.done*) echo "stub mv: disk error" >&2; exit 1 ;; esac
+exec "${realMv}" "$@"
+`);
+  chmodSync(join(bin, 'mv'), 0o755);
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /could not be cleared/);
+  assert.doesNotMatch(r.stdout, /rolled back/);
+  assert.equal(JSON.parse(readFileSync(join(data, 'version.json'), 'utf-8')).version, '20261007');
+  assert.ok(existsSync(join(data, 'fonts', 'Noto Sans Regular', '0-255.pbf')), 'new fonts stay live');
+  assert.equal(readFileSync(join(data, 'tiles', 'bay-area.pmtiles')).length, 2048, 'new tiles stay live');
+  assert.ok(existsSync(join(data, '.prev', 'version.json')), 'old release left for the next run to clear');
+});
+
+test('refresh-maps.sh: next run finds a committed release (.prev + live version.json) and clears .prev, no rollback', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: true });
+  const live = '{"version":"20261007","build":"20261007","updatedAt":"2026-10-11T04:37:10Z"}';
+  writeFileSync(join(data, 'version.json'), live);
+  mkdirSync(join(data, 'fonts')); writeFileSync(join(data, 'fonts', 'x'), 'NEW');
+  mkdirSync(join(data, '.prev', 'fonts'), { recursive: true });
+  writeFileSync(join(data, '.prev', 'fonts', 'x'), 'OLD');
+  writeFileSync(join(data, '.prev', 'version.json'), '{"version":"20260701"}');
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr); // extract stub fails afterwards
+  assert.match(r.stdout, /committed release/);
+  assert.doesNotMatch(r.stdout, /interrupted release|rolled back/);
+  assert.equal(readFileSync(join(data, 'version.json'), 'utf-8'), live);
+  assert.equal(readFileSync(join(data, 'fonts', 'x'), 'utf-8'), 'NEW');
+  assert.equal(existsSync(join(data, '.prev')), false);
+});
+
+test('refresh-maps.sh: a rollback that was already under way is finished, never read as committed', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
+  const { data, env } = stubEnv(t, { extractFails: true });
+  // A previous rollback marked .prev, then stopped before restoring version.json.
+  writeFileSync(join(data, 'version.json'), '{"version":"20261007"}');
+  mkdirSync(join(data, '.prev'));
+  writeFileSync(join(data, '.prev', '.rollback'), '');
+  writeFileSync(join(data, '.prev', 'version.json'), '{"version":"20260701"}');
+  const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /interrupted release/);
+  assert.equal(readFileSync(join(data, 'version.json'), 'utf-8'), '{"version":"20260701"}');
+  assert.equal(existsSync(join(data, '.prev')), false);
+});
+
 // ── image / compose wiring: the routes must read where the release is written ──
 test('Dockerfile sets every data path the routes read, all under /data', () => {
   const docker = readFileSync(resolve('Dockerfile'), 'utf-8');
@@ -273,9 +330,16 @@ test('Dockerfile sets every data path the routes read, all under /data', () => {
   }
 });
 
-test('docker-compose mounts ONE volume at /data and nothing beneath it', () => {
+test('docker-compose: one release volume at /data, styles kept on its own volume, no release piece mounted', () => {
   const compose = readFileSync(resolve('docker-compose.yml'), 'utf-8');
   const svc = compose.split(/\n {2}photon:/)[0]; // bb-maps service block only
-  const mounts = [...svc.matchAll(/^\s+- [\w.-]+:(\/\S*)\s*$/gm)].map(m => m[1]);
-  assert.deepEqual(mounts, ['/data']);
+  const mounts = Object.fromEntries([...svc.matchAll(/^\s+- ([\w.-]+):(\/\S*)\s*$/gm)].map(m => [m[2], m[1]]));
+  assert.deepEqual(Object.keys(mounts).sort(), ['/data', '/data/styles']);
+  // styles-data is the pre-#11 volume: existing Compose styles must survive the upgrade.
+  assert.equal(mounts['/data/styles'], 'styles-data');
+  assert.match(compose, /\nvolumes:[\s\S]*\n {2}styles-data:/, 'styles-data declared');
+  // refresh-maps.sh renames these; a mount point cannot be renamed.
+  for (const piece of ['/data/tiles', '/data/fonts', '/data/sprites', '/data/assets']) {
+    assert.equal(mounts[piece], undefined, `${piece} must not be a mount point`);
+  }
 });
