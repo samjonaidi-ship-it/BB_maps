@@ -9,8 +9,8 @@
  * place each month (Devin, PR #11).
  */
 import { join, resolve } from 'node:path';
-import { existsSync, createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 
 const ASSETS_DIR = process.env.ASSETS_DIR || resolve('data/assets');
 
@@ -31,16 +31,38 @@ export async function assetsRoute(fastify) {
         return reply.code(404).send({ error: 'Asset bundle not found' });
       }
 
-      const { size } = await stat(filePath);
+      // One handle for stat AND body: the monthly swap renames a new file into
+      // place, and a stat-then-open could pair the old length with the new bytes.
+      // A rollback briefly removes the file between the check above and here.
+      let fh;
+      try {
+        fh = await open(filePath, 'r');
+      } catch (err) {
+        if (err.code === 'ENOENT') return reply.code(404).send({ error: 'Asset bundle not found' });
+        throw err;
+      }
+      const { size, mtimeMs } = await fh.stat();
+      const etag = `"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`;
       reply
         .header('Content-Type', 'application/x-tar')
-        .header('Content-Length', size)
-        // no-cache: a monthly release replaces these files under the same URL;
-        // a day-long cache would hand a phone last month's tar for a new version.
+        .header('ETag', etag)
+        // no-cache + ETag: a monthly release replaces these files under the same
+        // URL, so caches revalidate (304 when unchanged) instead of serving
+        // last month's tar for a new version.
         .header('Cache-Control', 'public, no-cache');
 
-      if (request.method === 'HEAD') return reply.send();
-      return reply.send(createReadStream(filePath));
+      // Weak comparison (RFC 9110 13.1.2): proxies may send W/"…" or a list.
+      const inm = String(request.headers['if-none-match'] ?? '');
+      if (inm.split(',').some((t) => t.trim().replace(/^W\//, '') === etag || t.trim() === '*')) {
+        await fh.close();
+        return reply.code(304).send();
+      }
+      reply.header('Content-Length', size);
+      if (request.method === 'HEAD') {
+        await fh.close();
+        return reply.send();
+      }
+      return reply.send(fh.createReadStream());
     },
   });
 }
