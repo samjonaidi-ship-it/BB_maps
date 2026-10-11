@@ -1,7 +1,9 @@
-// BB_Maps | src/routes/release-cache.test.js | v1.0.0 | 2026-10-10 | BB
+// BB_Maps | src/routes/release-cache.test.js | v1.1.0 | 2026-10-10 | BB
 // Fonts and sprites are replaced in place by the monthly release
 // (refresh-maps.sh) at URLs that never change, so they must not be cached
-// `immutable` or for a week (Devin, PR #11): same 1-day policy as tiles.
+// `immutable` or for a week (Devin, PR #11), and carry no stale-while-revalidate
+// window either (Devin, PR #14): a stale window lets a cache hand back the old
+// glyphs for up to that long after max-age. One day is the whole bound.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 
-const TILES_POLICY = 'public, max-age=86400, stale-while-revalidate=604800';
+const POLICY = 'public, max-age=86400';
 let dir;
 let app;
 
@@ -41,9 +43,9 @@ for (const [name, url] of [
   ['font fallback', '/fonts/Missing%20Font/0-255.pbf'],
   ['sprites', '/sprites/bb.json'],
 ]) {
-  test(`${name} are cached like tiles, never immutable`, async () => {
+  test(`${name} are cached at most one day, no stale window`, async () => {
     const res = await app.inject({ url });
     assert.equal(res.statusCode, 200);
-    assert.equal(res.headers['cache-control'], TILES_POLICY);
+    assert.equal(res.headers['cache-control'], POLICY);
   });
 }

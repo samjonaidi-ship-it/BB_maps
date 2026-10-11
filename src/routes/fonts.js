@@ -42,7 +42,7 @@ export async function fontsRoute(fastify) {
         const buffer = await readFile(fallbackPath);
         reply
           .header('Content-Type', 'application/x-protobuf')
-          .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+          .header('Cache-Control', 'public, max-age=86400')
           .header('X-Font-Fallback', 'true');
         return reply.send(buffer);
       }
@@ -53,7 +53,7 @@ export async function fontsRoute(fastify) {
 
     reply
       .header('Content-Type', 'application/x-protobuf')
-      .header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      .header('Cache-Control', 'public, max-age=86400');
 
     return reply.send(buffer);
   });
