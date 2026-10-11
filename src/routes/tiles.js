@@ -44,7 +44,9 @@ export async function tilesRoute(fastify) {
     // stale + fresh bytes into a corrupt pmtiles.
     const etag = `"${fileSize}-${Math.floor(stat.mtimeMs)}"`;
     const lastModified = new Date(stat.mtimeMs).toUTCString();
-    const CACHE = 'public, max-age=86400, stale-while-revalidate=604800';
+    // One day flat: the monthly release replaces this file at the same URL, so a
+    // stale-while-revalidate window would let caches serve the old build longer.
+    const CACHE = 'public, max-age=86400';
     const EXPOSE = 'Content-Range, Content-Length, Accept-Ranges, ETag';
 
     // HEAD — return file-size headers only (MapLibre size discovery), no body.
