@@ -1,7 +1,8 @@
 #!/bin/sh
 # BB_Maps | refresh-maps.sh | v1.4.0 | 2026-10-10 | BB
 # v1.4.0: the no-downgrade check runs before staging, so a refused build costs
-#         no tile extract and no assets download.
+#         no tile extract and no assets download; it runs again before the swap
+#         (Devin, PR #17) for a version published meanwhile via /admin/version.
 # v1.3.0 (Devin, PR #11 red 20): the commit point is version.json going live,
 #         not the later .prev rename. A failure or kill after it keeps the new
 #         release (phones may already have its version) and the next run only
@@ -199,18 +200,23 @@ case "${TILES_BUILD_DATE:-auto}" in
 esac
 log "build $BUILD bbox=$TILES_BBOX maxzoom=$TILES_MAXZOOM"
 
-# The live release, read before anything is downloaded: a run that would step
-# back to an older build stops here, not after the tile extract and assets download.
-PREV_VERSION=""
-[ -f "$VERSION_FILE" ] && PREV_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" | head -1)
-# Never step back to an older build on the automatic path (the lookback can land
-# on one when the newer days are unreachable). A pinned date may go back on purpose.
-PREV_BUILD=$(printf '%s' "$PREV_VERSION" | cut -c1-8)
-case "${TILES_BUILD_DATE:-auto}" in ""|auto)
-  case "$PREV_BUILD" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
-    [ "$BUILD" -ge "$PREV_BUILD" ] || fail "build $BUILD is older than the live $PREV_BUILD - not downgrading" ;;
-  esac ;;
-esac
+# Read the live version into PREV_VERSION and refuse an older build. Never step
+# back on the automatic path (the lookback can land on one when the newer days
+# are unreachable). A pinned date may go back on purpose.
+check_live_version() {
+  PREV_VERSION=""
+  [ -f "$VERSION_FILE" ] && PREV_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$VERSION_FILE" | head -1)
+  PREV_BUILD=$(printf '%s' "$PREV_VERSION" | cut -c1-8)
+  case "${TILES_BUILD_DATE:-auto}" in ""|auto)
+    case "$PREV_BUILD" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+      [ "$BUILD" -ge "$PREV_BUILD" ] || fail "build $BUILD is older than the live $PREV_BUILD - not downgrading" ;;
+    esac ;;
+  esac
+}
+# Checked before anything is downloaded, so a refused build costs no tile
+# extract or assets download - and again before the swap (step 3), since
+# POST /admin/version can publish a newer version while this run stages.
+check_live_version
 
 # ── 2. stage + verify ───────────────────────────────────────────────────
 rm -rf "$STAGE"
@@ -243,7 +249,8 @@ SPRITES_TAR_BYTES=$(wc -c < "$STAGE/assets/sprites.tar" | tr -d ' ')
 # ── 3. swap, then publish the version ───────────────────────────────────
 # A republish of the same build (coverage change, manual run) still has to look
 # new to phones, which compare version strings: BUILD, then BUILD.1, BUILD.2...
-# (PREV_VERSION was read in step 1.)
+# Re-read: the live version may have changed during staging (POST /admin/version).
+check_live_version
 case "$PREV_VERSION" in
   "$BUILD") VERSION="$BUILD.1" ;;
   "$BUILD".*)
