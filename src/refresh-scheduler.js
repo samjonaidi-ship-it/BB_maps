@@ -1,4 +1,4 @@
-// BB_Maps | src/refresh-scheduler.js | v1.0.0 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.js | v1.0.1 | 2026-10-10 | BB
 // Monthly map release. Every CHECK_MS it asks isRefreshDue(); when due it runs
 // refresh-maps.sh (tiles + fonts + sprites + version.json as one release).
 // Phones see the new version on their next daily check and re-download every
@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { setTimeout, setInterval, clearTimeout, clearInterval } from 'node:timers';
 
 const TZ = 'America/Los_Angeles';
@@ -85,7 +85,8 @@ export function startRefreshScheduler({ log, script = resolve('refresh-maps.sh')
     log.info('[refresh] scheduler off (MAPS_AUTO_REFRESH=0)');
     return () => {};
   }
-  const file = versionFile || process.env.VERSION_FILE || resolve('data/version.json');
+  // Same default as refresh-maps.sh ($DATA_DIR/version.json), not ./data under WORKDIR.
+  const file = versionFile || process.env.VERSION_FILE || join(process.env.DATA_DIR || '/data', 'version.json');
   let running = false;
   let lastFailureAt = 0;
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# BB_Maps | refresh-maps.sh | v1.0.0 | 2026-10-10 | BB
+# BB_Maps | refresh-maps.sh | v1.1.0 | 2026-10-10 | BB
 # One map release = tiles + fonts + sprites + offline-pack tars + version.json,
 # built together so phones never mix a new tile pack with old assets.
 #
@@ -48,15 +48,25 @@ fi
 if ! mkdir "$LOCK" 2>/dev/null; then log "another refresh is running - skipping"; exit 1; fi
 trap 'rm -rf "$STAGE"; rmdir "$LOCK" 2>/dev/null' EXIT
 
-fail() { log "FAILED: $* - live map and version.json unchanged"; exit 1; }
+SWAPPING=false
+fail() {
+  if [ "$SWAPPING" = true ]; then
+    log "FAILED mid-swap: $* - version.json unchanged, so phones keep their packs; next run rebuilds"
+  else
+    log "FAILED: $* - live map and version.json unchanged"
+  fi
+  exit 1
+}
 
 # ── 1. which build ──────────────────────────────────────────────────────
 BUILD=""
 case "${TILES_BUILD_DATE:-auto}" in
   ""|auto)
+    # Epoch arithmetic + "@seconds": works with GNU and BusyBox date alike.
+    TODAY_S=$(date -u -d "$REFRESH_TODAY" +%s) || fail "bad REFRESH_TODAY $REFRESH_TODAY"
     i=0
     while [ "$i" -le "$REFRESH_LOOKBACK_DAYS" ]; do
-      d=$(date -u -d "$REFRESH_TODAY -$i day" +%Y%m%d) || fail "bad REFRESH_TODAY $REFRESH_TODAY"
+      d=$(date -u -d "@$((TODAY_S - i * 86400))" +%Y%m%d) || fail "date arithmetic"
       if wget -q --spider "$BUILD_BASE_URL/$d.pmtiles"; then BUILD="$d"; break; fi
       i=$((i + 1))
     done
@@ -95,20 +105,28 @@ FONTS_TAR_BYTES=$(wc -c < "$STAGE/assets/fonts.tar" | tr -d ' ')
 SPRITES_TAR_BYTES=$(wc -c < "$STAGE/assets/sprites.tar" | tr -d ' ')
 
 # ── 3. swap, then publish the version ───────────────────────────────────
-# Each mv is a same-volume rename, so a request mid-swap reads the old or the
-# new file, never a partial one.
+# Every mv is a same-volume rename. Assets go first and the tile file last, so
+# a failure leaves old tiles under the old version.json (phones see nothing new;
+# the next run rebuilds). A directory swap is two renames, so /fonts and
+# /sprites can 404 for the microseconds between them; MapLibre retries a glyph
+# or sprite request, and the swap runs at 2 AM PT.
+SWAPPING=true
 mkdir -p "$TILES_DIR" "$ASSETS_DIR" "$(dirname "$FONTS_DIR")" "$(dirname "$SPRITES_DIR")"
-mv -f "$STAGE/$TILES_FILE" "$TILES_DIR/$TILES_FILE" || fail "tile swap"
 swap_dir() {
-  rm -rf "$1.old"
-  [ -d "$1" ] && mv "$1" "$1.old"
-  mv "$2" "$1" || { [ -d "$1.old" ] && mv "$1.old" "$1"; return 1; }
+  rm -rf "$1.new" "$1.old"
+  mv "$2" "$1.new" || return 1
+  if [ -d "$1" ]; then mv "$1" "$1.old" || return 1; fi
+  if ! mv "$1.new" "$1"; then
+    [ -d "$1.old" ] && mv "$1.old" "$1"
+    return 1
+  fi
   rm -rf "$1.old"
 }
 swap_dir "$FONTS_DIR" "$STAGE/fonts" || fail "fonts swap"
 swap_dir "$SPRITES_DIR" "$STAGE/sprites" || fail "sprites swap"
 mv -f "$STAGE/assets/fonts.tar" "$ASSETS_DIR/fonts.tar" || fail "fonts.tar swap"
 mv -f "$STAGE/assets/sprites.tar" "$ASSETS_DIR/sprites.tar" || fail "sprites.tar swap"
+mv -f "$STAGE/$TILES_FILE" "$TILES_DIR/$TILES_FILE" || fail "tile swap"
 # Kept for the v1.3.0 entrypoint's bbox|date marker (harmless if unused).
 printf '%s' "$TILES_BBOX|$BUILD" > "$TILES_DIR/.tiles-seed"
 
