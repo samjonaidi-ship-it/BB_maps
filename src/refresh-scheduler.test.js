@@ -1,4 +1,5 @@
-// BB_Maps | src/refresh-scheduler.test.js | v1.3.0 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.test.js | v1.3.1 | 2026-10-10 | BB
+// v1.3.1: the Dockerfile path check accepts DATA_DIR=/data (the volume root), read by admin.js.
 // v1.3.0: stubs log their calls; a refused downgrade downloads nothing; a
 //         version published during staging is re-checked (Devin, PR #17).
 // v1.2.0 (Devin, PR #11 reds 18 + 20): version.json going live is the commit
@@ -361,7 +362,8 @@ test('Dockerfile sets every data path the routes read, all under /data', () => {
   assert.ok(read.size >= 6, `found ${[...read]}`);
   for (const name of read) {
     assert.ok(envs[name], `Dockerfile has no ENV ${name} - the route falls back to /app/data`);
-    assert.match(envs[name], /^\/data\//, `${name}=${envs[name]} is not on the /data volume`);
+    // DATA_DIR is the volume itself (/data); every other path sits under it.
+    assert.match(envs[name], /^\/data(\/|$)/, `${name}=${envs[name]} is not on the /data volume`);
   }
 });
 

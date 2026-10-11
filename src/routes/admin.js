@@ -4,12 +4,18 @@
  * Provides version manifest, usage stats, and administrative endpoints
  * called by Bridge/CT for fleet management.
  */
-import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, writeFile, mkdir, rmdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getSatelliteUsage, resetSatelliteUsage } from './satellite.js';
 
 const VERSION_FILE = process.env.VERSION_FILE || resolve('data/version.json');
+// The lock refresh-maps.sh holds for its whole run ($DATA_DIR/.refresh.lock).
+// POST /version takes it too, so a manual publish and a refresh never interleave
+// (Devin, PR #18): otherwise the refresh's version.json could overwrite it.
+// Same path rule as the script (DATA_DIR, default /data), never VERSION_FILE's
+// folder: VERSION_FILE may live elsewhere (Devin, PR #19).
+const REFRESH_LOCK = join(process.env.DATA_DIR || '/data', '.refresh.lock');
 
 // In-memory request counters
 const counters = {
@@ -83,7 +89,19 @@ export async function adminRoute(fastify) {
       tiles: tiles || {},
     };
 
-    await writeFile(VERSION_FILE, JSON.stringify(manifest, null, 2));
+    try {
+      await mkdir(REFRESH_LOCK);
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        return reply.code(409).send({ error: 'a map refresh is running - retry later' });
+      }
+      throw err;
+    }
+    try {
+      await writeFile(VERSION_FILE, JSON.stringify(manifest, null, 2));
+    } finally {
+      await rmdir(REFRESH_LOCK).catch(() => {});
+    }
     reply.send({ ok: true, manifest });
   });
 
