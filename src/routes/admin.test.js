@@ -1,4 +1,5 @@
-// BB_Maps | src/routes/admin.test.js | v1.0.0 | 2026-10-10 | BB
+// BB_Maps | src/routes/admin.test.js | v1.1.0 | 2026-10-10 | BB
+// v1.1.0: the lock is in DATA_DIR even when VERSION_FILE lives elsewhere (Devin, PR #19).
 // POST /admin/version takes refresh-maps.sh's lock, so a manual publish and a
 // monthly refresh never overwrite each other's version.json (Devin, PR #18).
 
@@ -17,9 +18,13 @@ let lock;
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'bbadmin-'));
-  file = join(dir, 'version.json');
-  lock = join(dir, '.refresh.lock');
+  // version.json deliberately NOT in DATA_DIR: the lock must follow DATA_DIR.
+  mkdirSync(join(dir, 'data'));
+  mkdirSync(join(dir, 'manifests'));
+  file = join(dir, 'manifests', 'version.json');
+  lock = join(dir, 'data', '.refresh.lock');
   process.env.VERSION_FILE = file;
+  process.env.DATA_DIR = join(dir, 'data');
   process.env.ADMIN_API_KEY = KEY;
   const { adminRoute } = await import('./admin.js');
   app = Fastify();

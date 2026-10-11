@@ -5,7 +5,7 @@
  * called by Bridge/CT for fleet management.
  */
 import { readFile, writeFile, mkdir, rmdir } from 'node:fs/promises';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getSatelliteUsage, resetSatelliteUsage } from './satellite.js';
 
@@ -13,8 +13,9 @@ const VERSION_FILE = process.env.VERSION_FILE || resolve('data/version.json');
 // The lock refresh-maps.sh holds for its whole run ($DATA_DIR/.refresh.lock).
 // POST /version takes it too, so a manual publish and a refresh never interleave
 // (Devin, PR #18): otherwise the refresh's version.json could overwrite it.
-// version.json lives in $DATA_DIR (Dockerfile, compose), so its folder is the lock's.
-const REFRESH_LOCK = join(dirname(VERSION_FILE), '.refresh.lock');
+// Same path rule as the script (DATA_DIR, default /data), never VERSION_FILE's
+// folder: VERSION_FILE may live elsewhere (Devin, PR #19).
+const REFRESH_LOCK = join(process.env.DATA_DIR || '/data', '.refresh.lock');
 
 // In-memory request counters
 const counters = {
