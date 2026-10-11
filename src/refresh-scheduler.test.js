@@ -1,4 +1,5 @@
-// BB_Maps | src/refresh-scheduler.test.js | v1.2.0 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.test.js | v1.3.0 | 2026-10-10 | BB
+// v1.3.0: stubs log their calls; a refused downgrade downloads nothing.
 // v1.2.0 (Devin, PR #11 reds 18 + 20): version.json going live is the commit
 //         point; Compose keeps styles on their own volume.
 // v1.1.0 (Devin round 1): republish versioning, pinned-by-build, mid-swap and
@@ -104,7 +105,9 @@ function stubEnv(t, { extractFails }) {
   const data = join(root, 'data');
   mkdirSync(bin); mkdirSync(data);
   // pmtiles: extract writes 2 KB (or fails), show succeeds.
+  // Both stubs log each call to bin/calls, so a test can prove nothing was downloaded.
   writeFileSync(join(bin, 'pmtiles'), `#!/bin/sh
+echo "pmtiles $1" >> "$(dirname "$0")/calls"
 case "$1" in
   extract) ${extractFails ? 'echo "stub: upstream 404" >&2; exit 1' : 'head -c 2048 /dev/zero > "$3"'} ;;
   show) exit 0 ;;
@@ -116,6 +119,7 @@ for a in "$@"; do last="$a"; done
 case " $* " in
   *" --spider "*) case "$last" in *20261007.pmtiles) exit 0 ;; *) exit 8 ;; esac ;;
 esac
+echo "wget -O" >> "$(dirname "$0")/calls"
 out=""; while [ $# -gt 0 ]; do [ "$1" = "-O" ] && out="$2"; shift; done
 s=$(mktemp -d); mkdir -p "$s/basemaps-assets-main/fonts/Noto Sans Regular" "$s/basemaps-assets-main/sprites/v4"
 echo f > "$s/basemaps-assets-main/fonts/Noto Sans Regular/0-255.pbf"
@@ -126,6 +130,7 @@ tar -czf "$out" -C "$s" basemaps-assets-main; rm -rf "$s"
   const sep = process.platform === 'win32' ? ';' : ':';
   return {
     data,
+    calls: () => (existsSync(join(bin, 'calls')) ? readFileSync(join(bin, 'calls'), 'utf-8') : ''),
     env: {
       ...process.env, PATH: `${bin}${sep}${process.env.PATH}`, DATA_DIR: sh(data),
       PMTILES_BIN: sh(join(bin, 'pmtiles')), TILES_MIN_BYTES: '1000', REFRESH_TODAY: '2026-10-10', TILES_BUILD_DATE: 'auto',
@@ -174,13 +179,15 @@ test('refresh-maps.sh: republishing the same build bumps the version (BUILD.1, B
 });
 
 test('refresh-maps.sh: auto mode never publishes a build older than the live one', { skip: !hasSh && 'no POSIX sh/GNU date' }, (t) => {
-  const { data, env } = stubEnv(t, { extractFails: false });
+  const { data, env, calls } = stubEnv(t, { extractFails: false });
   const live = '{"version":"20261009","build":"20261009","updatedAt":"2026-10-09T09:00:00Z"}';
   writeFileSync(join(data, 'version.json'), live);
   const r = spawnSync('sh', [SCRIPT], { env, encoding: 'utf-8' }); // stub's newest is 20261007
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /not downgrading/);
   assert.equal(readFileSync(join(data, 'version.json'), 'utf-8'), live);
+  // Refused before staging: no tile extract, no assets download.
+  assert.equal(calls(), '', 'nothing downloaded for a refused build');
   // A pinned date may go back on purpose.
   const pinned = spawnSync('sh', [SCRIPT], { env: { ...env, TILES_BUILD_DATE: '20261007' }, encoding: 'utf-8' });
   assert.equal(pinned.status, 0, pinned.stdout + pinned.stderr);
