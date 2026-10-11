@@ -40,6 +40,14 @@ test('satellite limit defaults above the shared 600', () => {
   assert.equal(mod.SATELLITE_RATE_LIMIT_MAX, 3000);
 });
 
+test('a mistyped env limit falls back to 3000 instead of breaking the limiter', () => {
+  for (const raw of ['3,000', 'abc', '0', '-5', '12.5', 'unlimited']) {
+    assert.equal(mod.parseSatelliteRateLimit(raw), 3000, raw);
+  }
+  assert.equal(mod.parseSatelliteRateLimit(undefined), 3000);
+  assert.equal(mod.parseSatelliteRateLimit('5000'), 5000);
+});
+
 test('one client gets more than 600 tiles a minute, other routes keep their own bucket', async () => {
   const n = GLOBAL_MAX + 50;
   const statuses = {};
