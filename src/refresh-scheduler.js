@@ -1,4 +1,8 @@
-// BB_Maps | src/refresh-scheduler.js | v1.0.2 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.js | v1.1.0 | 2026-10-12 | BB
+// v1.1.0 (Sam GO, 2026-10-11): coverage reaches Windsor / north Sonoma. A
+// changed box is "coverage changed -> due now", so the first check after the
+// deploy re-extracts. DEFAULT_BBOX is exported so a test pins it to the
+// refresh-maps.sh default: two different defaults would re-extract every check.
 // Monthly map release. Every CHECK_MS it asks isRefreshDue(); when due it runs
 // refresh-maps.sh (tiles + fonts + sprites + version.json as one release).
 // Phones see the new version on their next daily check and re-download every
@@ -20,7 +24,7 @@ const CHECK_MS = 15 * 60_000;
 const RETRY_MS = 6 * 60 * 60_000;
 const RUN_HOUR_PT = 2;
 
-const DEFAULT_BBOX = '-122.6,36.4,-121.2,37.95';
+export const DEFAULT_BBOX = '-122.95,36.4,-121.2,38.65';
 
 /** {year, month, day, weekday 0=Sun, hour} of an instant, in Pacific time. */
 export function pacificParts(date) {

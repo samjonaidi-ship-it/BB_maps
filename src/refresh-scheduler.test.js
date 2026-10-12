@@ -1,4 +1,5 @@
-// BB_Maps | src/refresh-scheduler.test.js | v1.3.1 | 2026-10-10 | BB
+// BB_Maps | src/refresh-scheduler.test.js | v1.4.0 | 2026-10-12 | BB
+// v1.4.0: the scheduler's DEFAULT_BBOX and the refresh-maps.sh default are one box.
 // v1.3.1: the Dockerfile path check accepts DATA_DIR=/data (the volume root), read by admin.js.
 // v1.3.0: stubs log their calls; a refused downgrade downloads nothing; a
 //         version published during staging is re-checked (Devin, PR #17).
@@ -18,9 +19,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { isRefreshDue, firstSundayOfMonth, pacificParts } from './refresh-scheduler.js';
+import { isRefreshDue, firstSundayOfMonth, pacificParts, DEFAULT_BBOX } from './refresh-scheduler.js';
 
-const BBOX = '-122.6,36.4,-121.2,37.95';
+const BBOX = DEFAULT_BBOX; // the box the script publishes with no TILES_BBOX set
 const built = (updatedAt, extra = {}) => ({ version: '20261004', updatedAt, bbox: BBOX, ...extra });
 const due = (manifest, iso, opts = {}) => isRefreshDue({ manifest, now: new Date(iso), bbox: BBOX, ...opts }).due;
 
@@ -44,6 +45,19 @@ test('no release yet / placeholder / unreadable build time -> due', () => {
 
 test('coverage box changed -> due now, whatever the date', () => {
   assert.equal(due(built('2026-10-04T09:30:00Z', { bbox: '-122.5,37,-121.5,37.5' }), '2026-10-05T12:00:00Z'), true);
+});
+
+test('one coverage box: refresh-maps.sh default === DEFAULT_BBOX, and it reaches Windsor', () => {
+  const sh = readFileSync(resolve('refresh-maps.sh'), 'utf-8');
+  const marker = 'TILES_BBOX="${TILES_BBOX:-';
+  const at = sh.indexOf(marker);
+  assert.ok(at >= 0, 'refresh-maps.sh sets a TILES_BBOX default');
+  assert.equal(sh.slice(at + marker.length, sh.indexOf('}', at)), DEFAULT_BBOX);
+  const [west, south, east, north] = DEFAULT_BBOX.split(',').map(Number);
+  const inBox = ([lng, lat]) => lng >= west && lng <= east && lat >= south && lat <= north;
+  assert.ok(inBox([-122.8222, 38.5471]), 'Windsor');
+  assert.ok(inBox([-121.9624, 37.2266]), 'Los Gatos');
+  assert.ok(inBox([-122.0308, 36.9741]), 'Santa Cruz');
 });
 
 test('pinned build: due only when the live one differs', () => {
