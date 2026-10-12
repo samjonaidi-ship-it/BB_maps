@@ -1,5 +1,8 @@
 #!/bin/sh
-# BB_Maps | refresh-maps.sh | v1.4.0 | 2026-10-10 | BB
+# BB_Maps | refresh-maps.sh | v1.5.0 | 2026-10-12 | BB
+# v1.5.0 (Sam GO, 2026-10-11): coverage reaches north Sonoma - north 37.95 -> 38.65,
+#         west -122.6 -> -122.95 (Windsor 38.55,-122.82; Healdsburg). Must equal
+#         DEFAULT_BBOX in src/refresh-scheduler.js (a test pins them together).
 # v1.4.0: the no-downgrade check runs before staging, so a refused build costs
 #         no tile extract and no assets download; it runs again before the swap
 #         (Devin, PR #17) for a version published meanwhile via /admin/version.
@@ -39,7 +42,7 @@ set -u
 DATA_DIR="${DATA_DIR:-/data}"
 TILES_DIR="${TILES_DIR:-$DATA_DIR/tiles}"
 TILES_FILE="${TILES_FILE:-bay-area.pmtiles}"
-TILES_BBOX="${TILES_BBOX:--122.6,36.4,-121.2,37.95}"
+TILES_BBOX="${TILES_BBOX:--122.95,36.4,-121.2,38.65}"
 TILES_MAXZOOM="${TILES_MAXZOOM:-15}"
 TILES_MIN_BYTES="${TILES_MIN_BYTES:-50000000}"
 FONTS_DIR="${FONTS_DIR:-$DATA_DIR/fonts}"
