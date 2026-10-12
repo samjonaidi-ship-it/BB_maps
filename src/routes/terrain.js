@@ -30,7 +30,7 @@ export async function terrainRoute(fastify) {
 
     // Digits only (parseInt would accept '163abc' and mint duplicate cache keys).
     const yNum = y.replace(/\.png$/, '');
-    if (![z, x, yNum].every((v) => /^\d+$/.test(v))) {
+    if (![z, x, yNum].every((v) => /^(0|[1-9]\d*)$/.test(v))) {
       return reply.code(400).send({ error: 'Invalid tile coordinates' });
     }
     const zoom = parseInt(z, 10);
