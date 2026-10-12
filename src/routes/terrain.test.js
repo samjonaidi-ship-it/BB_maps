@@ -65,10 +65,33 @@ test('an upstream 404 stays a cacheable 404', async () => {
   assert.match(res.headers['cache-control'], /max-age=86400/);
 });
 
-test('S3 403 for a missing key is a cacheable miss, not an uncached 502', async () => {
+test('S3 403 is a short-cached miss: an access failure must not hide terrain for a day', async () => {
   const res = await app.inject({ url: '/terrain/9/1/3.png' });
   assert.equal(res.statusCode, 404);
-  assert.match(res.headers['cache-control'], /max-age=86400/);
+  assert.match(res.headers['cache-control'], /max-age=300$/);
+  assert.doesNotMatch(res.headers['cache-control'], /86400/);
+});
+
+test('the extensionless URL is rejected, so each tile has one cache key', async () => {
+  assert.equal((await app.inject({ url: '/terrain/10/163/396' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/163/396.jpg' })).statusCode, 400);
+});
+
+test('terrain usage is counted, served and reset through the shared getters', async () => {
+  const before = mod.getTerrainUsage().tileRequests;
+  await app.inject({ url: '/terrain/3/1/1.png' });
+  assert.equal(mod.getTerrainUsage().tileRequests, before + 1);
+  mod.resetTerrainUsage();
+  assert.equal(mod.getTerrainUsage().tileRequests, 0);
+});
+
+test('a bad TERRAIN_RATE_LIMIT_MAX warning names TERRAIN_RATE_LIMIT_MAX', async () => {
+  const { parseSatelliteRateLimit } = await import('./satellite.js');
+  const seen = [];
+  const orig = console.warn;
+  console.warn = (m) => seen.push(String(m));
+  try { assert.equal(parseSatelliteRateLimit('abc', 'TERRAIN_RATE_LIMIT_MAX'), 3000); } finally { console.warn = orig; }
+  assert.match(seen.join(' '), /TERRAIN_RATE_LIMIT_MAX="abc"/);
 });
 
 test('a 200 that is not a PNG is never served as a week-cached tile', async () => {

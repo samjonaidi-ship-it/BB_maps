@@ -17,9 +17,17 @@ export const TERRAIN_MAX_ZOOM = 15;
 
 // Same tile-hungry shape as /satellite (a 3D globe pulls both), so it gets its
 // own per-IP counter at the same default, parsed with the same guard.
-export const TERRAIN_RATE_LIMIT_MAX = parseSatelliteRateLimit(process.env.TERRAIN_RATE_LIMIT_MAX);
+export const TERRAIN_RATE_LIMIT_MAX = parseSatelliteRateLimit(process.env.TERRAIN_RATE_LIMIT_MAX, 'TERRAIN_RATE_LIMIT_MAX');
 
 let tileRequestCount = 0;
+
+export function getTerrainUsage() {
+  return { tileRequests: tileRequestCount };
+}
+
+export function resetTerrainUsage() {
+  tileRequestCount = 0;
+}
 
 export async function terrainRoute(fastify) {
   // GET /terrain/:z/:x/:y.png  (Terrarium order: x before y)
@@ -28,8 +36,13 @@ export async function terrainRoute(fastify) {
   }, async (request, reply) => {
     const { z, x, y } = request.params;
 
-    // Digits only (parseInt would accept '163abc' and mint duplicate cache keys).
-    const yNum = y.replace(/\.png$/, '');
+    // One URL per tile: '.png' required, digits only, no leading zeros
+    // (parseInt would accept '163abc', '0163' or a bare '396' and mint
+    // duplicate cache keys for the same upstream object).
+    if (!y.endsWith('.png')) {
+      return reply.code(400).send({ error: 'Invalid tile coordinates' });
+    }
+    const yNum = y.slice(0, -'.png'.length);
     if (![z, x, yNum].every((v) => /^(0|[1-9]\d*)$/.test(v))) {
       return reply.code(400).send({ error: 'Invalid tile coordinates' });
     }
@@ -56,10 +69,17 @@ export async function terrainRoute(fastify) {
 
       if (statusCode !== 200) {
         await body.dump();
-        // S3 answers 403, not 404, for a key the dataset lacks: both are a stable miss.
-        if (statusCode === 404 || statusCode === 403) {
+        // 404 is a stable miss (no elevation there): cache a day.
+        if (statusCode === 404) {
           reply.header('Cache-Control', 'public, max-age=86400');
           return reply.code(404).send({ error: 'No elevation at this location/zoom' });
+        }
+        // S3 answers 403 both for a key it lacks and for a real access failure,
+        // so it is served as a miss (MapLibre draws flat ground, no error) but
+        // cached only 5 min: terrain comes back soon after access does.
+        if (statusCode === 403) {
+          reply.header('Cache-Control', 'public, max-age=300');
+          return reply.code(404).send({ error: 'Elevation tile unavailable' });
         }
         fastify.log.warn({ statusCode, z, x: col, y: row }, 'Terrain tiles returned non-200');
         reply.header('Cache-Control', 'public, max-age=60');
@@ -87,5 +107,5 @@ export async function terrainRoute(fastify) {
   });
 
   // GET /terrain/usage — internal counter
-  fastify.get('/usage', async (request, reply) => reply.send({ tileRequests: tileRequestCount }));
+  fastify.get('/usage', async (request, reply) => reply.send(getTerrainUsage()));
 }
