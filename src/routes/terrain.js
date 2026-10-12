@@ -20,6 +20,10 @@ export const TERRAIN_MAX_ZOOM = 15;
 export const TERRAIN_RATE_LIMIT_MAX = parseSatelliteRateLimit(process.env.TERRAIN_RATE_LIMIT_MAX, 'TERRAIN_RATE_LIMIT_MAX');
 
 let tileRequestCount = 0;
+// Last time a 403 was logged: a real S3 denial must show in the logs, but
+// once a minute, not once per tile.
+let last403LogAt = 0;
+const LOG_403_EVERY_MS = 60_000;
 
 export function getTerrainUsage() {
   return { tileRequests: tileRequestCount };
@@ -78,6 +82,11 @@ export async function terrainRoute(fastify) {
         // so it is served as a miss (MapLibre draws flat ground, no error) but
         // cached only 5 min: terrain comes back soon after access does.
         if (statusCode === 403) {
+          const at = Date.now();
+          if (at - last403LogAt >= LOG_403_EVERY_MS) {
+            last403LogAt = at;
+            fastify.log.warn({ statusCode, z, x: col, y: row }, 'Terrain tiles returned 403 (missing key or access denied)');
+          }
           reply.header('Cache-Control', 'public, max-age=300');
           return reply.code(404).send({ error: 'Elevation tile unavailable' });
         }

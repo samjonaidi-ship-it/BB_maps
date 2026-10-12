@@ -13,6 +13,7 @@ let app;
 let prevDispatcher;
 let mod;
 const upstreamPaths = [];
+const logs = [];
 
 before(async () => {
   prevDispatcher = getGlobalDispatcher();
@@ -31,7 +32,7 @@ before(async () => {
   setGlobalDispatcher(agent);
 
   mod = await import('./terrain.js');
-  app = Fastify();
+  app = Fastify({ logger: { level: 'warn', stream: { write: (line) => logs.push(JSON.parse(line)) } } });
   await app.register(rateLimit, { max: GLOBAL_MAX, timeWindow: '1 minute' });
   await app.register(mod.terrainRoute, { prefix: '/terrain' });
 });
@@ -70,6 +71,8 @@ test('S3 403 is a short-cached miss: an access failure must not hide terrain for
   assert.equal(res.statusCode, 404);
   assert.match(res.headers['cache-control'], /max-age=300$/);
   assert.doesNotMatch(res.headers['cache-control'], /86400/);
+  // Logged (once a minute) so a real S3 denial is visible, not silent flat ground.
+  assert.ok(logs.some((l) => l.statusCode === 403 && /403/.test(l.msg)), JSON.stringify(logs));
 });
 
 test('the extensionless URL is rejected, so each tile has one cache key', async () => {
