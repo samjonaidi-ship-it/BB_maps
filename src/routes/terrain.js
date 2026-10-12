@@ -28,9 +28,14 @@ export async function terrainRoute(fastify) {
   }, async (request, reply) => {
     const { z, x, y } = request.params;
 
+    // Digits only (parseInt would accept '163abc' and mint duplicate cache keys).
+    const yNum = y.replace(/\.png$/, '');
+    if (![z, x, yNum].every((v) => /^\d+$/.test(v))) {
+      return reply.code(400).send({ error: 'Invalid tile coordinates' });
+    }
     const zoom = parseInt(z, 10);
     const col = parseInt(x, 10);
-    const row = parseInt(y.replace(/\.\w+$/, ''), 10); // strip extension
+    const row = parseInt(yNum, 10);
 
     if (isNaN(zoom) || zoom < 0 || zoom > TERRAIN_MAX_ZOOM) {
       return reply.code(400).send({ error: `Zoom must be 0-${TERRAIN_MAX_ZOOM}` });
@@ -51,18 +56,25 @@ export async function terrainRoute(fastify) {
 
       if (statusCode !== 200) {
         await body.dump();
-        if (statusCode === 404) {
+        // S3 answers 403, not 404, for a key the dataset lacks: both are a stable miss.
+        if (statusCode === 404 || statusCode === 403) {
           reply.header('Cache-Control', 'public, max-age=86400');
           return reply.code(404).send({ error: 'No elevation at this location/zoom' });
         }
         fastify.log.warn({ statusCode, z, x: col, y: row }, 'Terrain tiles returned non-200');
+        reply.header('Cache-Control', 'public, max-age=60');
         return reply.code(502).send({ error: 'Terrain upstream error' });
       }
 
+      if (!String(headers['content-type'] || '').startsWith('image/png')) {
+        await body.dump();
+        fastify.log.warn({ contentType: headers['content-type'], z, x: col, y: row }, 'Terrain tile was not a PNG');
+        return reply.code(502).send({ error: 'Terrain upstream error' });
+      }
       const buf = Buffer.from(await body.arrayBuffer());
       // Elevation does not change: cache for a week, serve stale for a month.
       reply
-        .header('Content-Type', headers['content-type'] || 'image/png')
+        .header('Content-Type', 'image/png')
         .header('Content-Length', buf.length)
         .header('Cache-Control', 'public, max-age=604800, stale-while-revalidate=2592000')
         .header('X-Tile-Source', 'aws-terrain-tiles-terrarium');
