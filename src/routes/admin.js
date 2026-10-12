@@ -8,6 +8,7 @@ import { readFile, writeFile, mkdir, rmdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getSatelliteUsage, resetSatelliteUsage } from './satellite.js';
+import { getTerrainUsage, resetTerrainUsage } from './terrain.js';
 
 const VERSION_FILE = process.env.VERSION_FILE || resolve('data/version.json');
 // The lock refresh-maps.sh holds for its whole run ($DATA_DIR/.refresh.lock).
@@ -22,6 +23,7 @@ const counters = {
   tiles: 0,
   geocode: 0,
   satellite: 0,
+  terrain: 0,
   fonts: 0,
   sprites: 0,
   styles: 0,
@@ -41,6 +43,7 @@ export function registerCountingHook(rootApp) {
     if (path.startsWith('/tiles')) counters.tiles++;
     else if (path.startsWith('/geocode')) counters.geocode++;
     else if (path.startsWith('/satellite')) counters.satellite++;
+    else if (path.startsWith('/terrain')) counters.terrain++;
     else if (path.startsWith('/fonts')) counters.fonts++;
     else if (path.startsWith('/sprites')) counters.sprites++;
     else if (path.startsWith('/styles')) counters.styles++;
@@ -108,9 +111,11 @@ export async function adminRoute(fastify) {
   // GET /admin/usage — request counters for CT dashboard
   fastify.get('/usage', async (request, reply) => {
     const satellite = getSatelliteUsage();
+    const terrain = getTerrainUsage();
     reply.send({
       ...counters,
       satellite: satellite.tileRequests,
+      terrain: terrain.tileRequests,
       uptime: Math.floor((Date.now() - new Date(counters.startedAt).getTime()) / 1000),
     });
   });
@@ -128,6 +133,7 @@ export async function adminRoute(fastify) {
     counters.tiles = 0;
     counters.geocode = 0;
     counters.satellite = 0;
+    counters.terrain = 0;
     counters.fonts = 0;
     counters.sprites = 0;
     counters.styles = 0;
@@ -135,6 +141,7 @@ export async function adminRoute(fastify) {
     counters.assets = 0;
     counters.startedAt = new Date().toISOString();
     resetSatelliteUsage();
+    resetTerrainUsage();
 
     reply.send({ ok: true, reset: counters.startedAt });
   });

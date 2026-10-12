@@ -21,11 +21,11 @@ const ESRI_BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Im
 // A mistyped env value ("3,000" -> 3, "abc" -> NaN, "0") would refuse every
 // tile - the very outage this fixes - so anything but an integer >= 1 falls back.
 const SATELLITE_RATE_LIMIT_DEFAULT = 3000;
-export function parseSatelliteRateLimit(raw) {
+export function parseSatelliteRateLimit(raw, envName = 'SATELLITE_RATE_LIMIT_MAX') {
   if (raw === undefined || raw === '') return SATELLITE_RATE_LIMIT_DEFAULT;
   const n = Number(raw);
   if (Number.isInteger(n) && n >= 1) return n;
-  console.warn(`[satellite] SATELLITE_RATE_LIMIT_MAX="${raw}" is not an integer >= 1; using ${SATELLITE_RATE_LIMIT_DEFAULT}`);
+  console.warn(`[maps] ${envName}="${raw}" is not an integer >= 1; using ${SATELLITE_RATE_LIMIT_DEFAULT}`);
   return SATELLITE_RATE_LIMIT_DEFAULT;
 }
 export const SATELLITE_RATE_LIMIT_MAX = parseSatelliteRateLimit(process.env.SATELLITE_RATE_LIMIT_MAX);

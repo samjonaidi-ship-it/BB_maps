@@ -1,0 +1,110 @@
+// BB_Maps | src/routes/terrain.test.js | v1.0.0 | 2026-10-11 | BB
+// /terrain proxies AWS Terrarium elevation tiles for the CalExp5 globe's 3D
+// terrain: x/y order, zoom 0-15, its own per-IP limit like /satellite.
+
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import Fastify from 'fastify';
+import rateLimit from '@fastify/rate-limit';
+import { MockAgent, setGlobalDispatcher, getGlobalDispatcher } from 'undici';
+
+const GLOBAL_MAX = 600; // index.js default
+let app;
+let prevDispatcher;
+let mod;
+const upstreamPaths = [];
+const logs = [];
+
+before(async () => {
+  prevDispatcher = getGlobalDispatcher();
+  const agent = new MockAgent();
+  agent.disableNetConnect();
+  const pool = agent.get('https://s3.amazonaws.com');
+  pool.intercept({ path: '/elevation-tiles-prod/terrarium/9/1/2.png', method: 'GET' })
+    .reply(404, 'nope').persist();
+  pool.intercept({ path: '/elevation-tiles-prod/terrarium/9/1/3.png', method: 'GET' })
+    .reply(403, '<Error>AccessDenied</Error>').persist();
+  pool.intercept({ path: '/elevation-tiles-prod/terrarium/9/1/4.png', method: 'GET' })
+    .reply(200, '<html>oops</html>', { headers: { 'content-type': 'text/html' } }).persist();
+  pool.intercept({ path: /\/elevation-tiles-prod\/terrarium\//, method: 'GET' })
+    .reply((opts) => { upstreamPaths.push(opts.path); return { statusCode: 200, data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), responseOptions: { headers: { 'content-type': 'image/png' } } }; })
+    .persist();
+  setGlobalDispatcher(agent);
+
+  mod = await import('./terrain.js');
+  app = Fastify({ logger: { level: 'warn', stream: { write: (line) => logs.push(JSON.parse(line)) } } });
+  await app.register(rateLimit, { max: GLOBAL_MAX, timeWindow: '1 minute' });
+  await app.register(mod.terrainRoute, { prefix: '/terrain' });
+});
+
+after(async () => {
+  await app?.close();
+  setGlobalDispatcher(prevDispatcher);
+});
+
+test('proxies z/x/y in Terrarium order and caches for a week', async () => {
+  const res = await app.inject({ url: '/terrain/10/163/396.png' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['content-type'], 'image/png');
+  assert.match(res.headers['cache-control'], /max-age=604800/);
+  assert.ok(upstreamPaths.includes('/elevation-tiles-prod/terrarium/10/163/396.png'), upstreamPaths.join(','));
+});
+
+test('rejects zoom past 15 and coordinates outside the zoom grid', async () => {
+  assert.equal((await app.inject({ url: '/terrain/16/0/0.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/2/4/0.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/2/0/-1.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/x/0/0.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/163abc/396.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/0163/396.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/163/396abc.png' })).statusCode, 400);
+});
+
+test('an upstream 404 stays a cacheable 404', async () => {
+  const res = await app.inject({ url: '/terrain/9/1/2.png' });
+  assert.equal(res.statusCode, 404);
+  assert.match(res.headers['cache-control'], /max-age=86400/);
+});
+
+test('S3 403 is a short-cached miss: an access failure must not hide terrain for a day', async () => {
+  const res = await app.inject({ url: '/terrain/9/1/3.png' });
+  assert.equal(res.statusCode, 404);
+  assert.match(res.headers['cache-control'], /max-age=300$/);
+  assert.doesNotMatch(res.headers['cache-control'], /86400/);
+  // Logged (once a minute) so a real S3 denial is visible, not silent flat ground.
+  assert.ok(logs.some((l) => l.statusCode === 403 && /403/.test(l.msg)), JSON.stringify(logs));
+});
+
+test('the extensionless URL is rejected, so each tile has one cache key', async () => {
+  assert.equal((await app.inject({ url: '/terrain/10/163/396' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/163/396.jpg' })).statusCode, 400);
+});
+
+test('terrain usage is counted, served and reset through the shared getters', async () => {
+  const before = mod.getTerrainUsage().tileRequests;
+  await app.inject({ url: '/terrain/3/1/1.png' });
+  assert.equal(mod.getTerrainUsage().tileRequests, before + 1);
+  mod.resetTerrainUsage();
+  assert.equal(mod.getTerrainUsage().tileRequests, 0);
+});
+
+test('a bad TERRAIN_RATE_LIMIT_MAX warning names TERRAIN_RATE_LIMIT_MAX', async () => {
+  const { parseSatelliteRateLimit } = await import('./satellite.js');
+  const seen = [];
+  const orig = console.warn;
+  console.warn = (m) => seen.push(String(m));
+  try { assert.equal(parseSatelliteRateLimit('abc', 'TERRAIN_RATE_LIMIT_MAX'), 3000); } finally { console.warn = orig; }
+  assert.match(seen.join(' '), /TERRAIN_RATE_LIMIT_MAX="abc"/);
+});
+
+test('a 200 that is not a PNG is never served as a week-cached tile', async () => {
+  const res = await app.inject({ url: '/terrain/9/1/4.png' });
+  assert.equal(res.statusCode, 502);
+  assert.doesNotMatch(String(res.headers['cache-control']), /604800/);
+});
+
+test('terrain has its own limit above the shared 600', async () => {
+  assert.equal(mod.TERRAIN_RATE_LIMIT_MAX, 3000);
+  const res = await app.inject({ url: '/terrain/4/1/1.png' });
+  assert.equal(res.headers['x-ratelimit-limit'], '3000');
+});
