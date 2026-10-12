@@ -55,6 +55,7 @@ test('rejects zoom past 15 and coordinates outside the zoom grid', async () => {
   assert.equal((await app.inject({ url: '/terrain/2/0/-1.png' })).statusCode, 400);
   assert.equal((await app.inject({ url: '/terrain/x/0/0.png' })).statusCode, 400);
   assert.equal((await app.inject({ url: '/terrain/10/163abc/396.png' })).statusCode, 400);
+  assert.equal((await app.inject({ url: '/terrain/10/0163/396.png' })).statusCode, 400);
   assert.equal((await app.inject({ url: '/terrain/10/163/396abc.png' })).statusCode, 400);
 });
 
