@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.13 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.13 | 2026-10-09 | BB
+<!-- BB-AGENT-CONTRACT v1.14 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.14 | 2026-10-14 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -33,7 +33,7 @@ was proven. Do not merge on them.
 Devin threads and re-arming are all yours, never handed back to Sam. Auto-merge
 is enabled on the managed repos; it waits for the required checks and merges
 only if they pass. Auth, CI, secrets, deploy and money changes are no
-exception, but two different reviews apply and the pace decides both:
+exception, but two different reviews apply, and the pace changes how each runs:
 
 - **The CI gate** (`Risky path review`, driven by `scripts/risky-paths.json`): at
   `BB_PACE=normal` it stays red on a risky diff until a human adds the
@@ -42,9 +42,15 @@ exception, but two different reviews apply and the pace decides both:
   `BB_PACE=fast` this job is skipped for every path, migrations included, and the
   PR merges on green CI with the lookback audit as the control.
 - **The local pre-push reviewer** (`bb-review` on Sam's machine, not CI): at
-  `BB_PACE=fast` it still reviews a push that touches migrations, and nothing
-  else. It reviews the diff; it does not apply or verify the migration — that is
-  the rule below.
+  every pace it reads every code push before it goes out, against the repo's
+  `REVIEW.md` and the touched files' past Devin findings, and a P1 blocks the
+  push (if the reviewer cannot run, the push goes out). Docs-only pushes are
+  skipped; a push that touches migrations goes to the full reviewer ladder
+  instead. At `BB_PACE=fast`, any part of a push the pre-push review could not
+  read gets a background review instead, which posts its verdict as the
+  `bb-review` commit status, and devin-gate fails on a P1 there; a push it read
+  in full gets no background review and no status. It reviews the
+  diff; it does not apply or verify a migration — that is the rule below.
 
 **STOP and hand to Sam** — do not merge, say what you changed and why it is here —
 only for:
