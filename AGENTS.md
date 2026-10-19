@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.14 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.14 | 2026-10-14 | BB
+<!-- BB-AGENT-CONTRACT v1.15 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.15 | 2026-10-19 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -44,9 +44,18 @@ exception, but two different reviews apply, and the pace changes how each runs:
 - **The local pre-push reviewer** (`bb-review` on Sam's machine, not CI): at
   every pace it reads every code push before it goes out, against the repo's
   `REVIEW.md` and the touched files' past Devin findings, and a P1 blocks the
-  push (if the reviewer cannot run, the push goes out). Docs-only pushes are
-  skipped; a push that touches migrations goes to the full reviewer ladder
-  instead. At `BB_PACE=fast`, any part of a push the pre-push review could not
+  push. If the reviewer cannot run, a small routine push goes out; a T3 or
+  larger push, a push that touches the gate itself, or a T2 review that could
+  not finish is blocked instead (fails closed). On a later push of a branch
+  already on the remote with an open PR, the fix-push check also blocks when
+  it cannot read the PR's Devin findings, or when it cannot read the push's
+  commit messages and a flagged file needs a `CASE-TABLE:` line; `BB_SKIP`
+  is the way past (`BB_PREPUSH_FIXLOOP=0` turns the check off, and says so).
+  A push to a local folder skips the check only when gh cannot answer at all,
+  and logs it.
+  Docs-only pushes are skipped; a push that touches migrations goes to the
+  full reviewer ladder instead. Both still run the fix-push check.
+  At `BB_PACE=fast`, any part of a push the pre-push review could not
   read gets a background review instead, which posts its verdict as the
   `bb-review` commit status, and devin-gate fails on a P1 there; a push it read
   in full gets no background review and no status. It reviews the
