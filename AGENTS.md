@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.16 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.16 | 2026-10-22 | BB
+<!-- BB-AGENT-CONTRACT v1.17 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.17 | 2026-10-23 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -37,10 +37,14 @@ exception, but two different reviews apply, and the pace changes how each runs:
 
 - **The CI gate** (`Risky path review`, driven by `scripts/risky-paths.json`): at
   `BB_PACE=normal` it stays red on a risky diff until a human adds the
-  `human-reviewed` label. **Agents never add that label**, so at normal pace a
-  risky PR waits for Sam — it is parked on him, not stuck; say so. At
-  `BB_PACE=fast` this job is skipped for every path, migrations included, and the
-  PR merges on green CI with the lookback audit as the control.
+  `human-reviewed` label. **Agents never add that label**, so a risky PR waits
+  for Sam — it is parked on him, not stuck; say so. At `BB_PACE=fast` the job
+  still runs, but the verdict is advisory for the ordinary risky categories:
+  it annotates `::warning`s and goes green, and the PR merges on green CI with
+  the lookback audit as the control. The gate-critical subset — CI and
+  workflow files, `scripts/check-risky-paths.mjs`, `scripts/risky-paths.json`,
+  and the category that covers them — stays red until `human-reviewed` at
+  EVERY pace: a PR rewriting the gate that judges it gets no advisory pass.
 - **The local pre-push reviewer** (`bb-review` on Sam's machine, not CI): at
   every pace it reads every code push before it goes out, against the repo's
   `REVIEW.md` and the touched files' past Devin findings, and a P1 blocks the
