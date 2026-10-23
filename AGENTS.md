@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.15 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.15 | 2026-10-19 | BB
+<!-- BB-AGENT-CONTRACT v1.16 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v1.16 | 2026-10-22 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -277,6 +277,41 @@ before coding starts.
   orphaned and has to go in a new PR.
 - **Cloud agents** cannot reach the lessons; read the PR's own Devin threads
   and the history of the files you touch instead.
+
+## 14. Shared lockfiles use the claim idiom — never unlink what you did not create
+
+Several tools coordinate through lockfiles (`findings-ledger`, `suite-lock`,
+`session-end-capture`, `pr-driver-claim`). Review rounds found the same race in
+every one of them, so the rules are fixed:
+
+- **Acquire by exclusive creation** of a *generation* file (`<lock>.<n>` carrying
+  your token, created with `wx`), not by testing a shared path then writing it.
+- **Never unlink, truncate or overwrite a shared lock path based on an earlier
+  observation that it was stale** — a fresh claim can land in the gap. Re-verify
+  identity (inode and content) in the same transaction before any destructive
+  step, and remove only a claim whose token is provably yours.
+- **Operations that rewrite shared state must be lossless.** Re-read under the
+  lock and merge rows appended during your hold; never rename a stale snapshot
+  over them. Writers that honor no lock exist — the rewrite must still not lose
+  their data.
+- A stale claim you cannot open for writing is reclaimed by rename-aside under
+  the same re-verify, never by delete-then-recreate.
+- `pr-driver-claim.mjs` is the reference implementation. Reuse it; do not invent
+  a third scheme.
+
+Before two agents edit the same file, `bb claims` lists the live claims and
+recent collisions; `bb procs` lists stale dev-tool processes; `bb resume-state
+<repo>` shows the derived state a session resumes from.
+
+## 15. The machine runs a harness mode — check it before relying on a scheduled task
+
+`BB_HARNESS=full|lean|off` (`bb harness status`) controls which scheduled tasks
+and hooks are live. Under `lean` only the guard dispatcher, proc-watch, the
+worktree sweep, the brain watchdog and the pre-push review run; under `off`
+optional machinery is disabled. Do not assume the digest or a watcher ran —
+check the mode. Hook rows are either **hard** (guards — a verdict that cannot
+run fails closed) or **optional** (injectors — fail open); a new row must say
+which it is, and a gate that cannot run must never silently pass.
 
 <!-- END BB-AGENT-CONTRACT -->
 
