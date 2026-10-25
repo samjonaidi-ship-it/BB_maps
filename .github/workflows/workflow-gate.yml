@@ -1,30 +1,34 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
 # A PR that changes what CI RUNS — anything under .github/, .husky/, .yarn/,
-# scripts/ at any depth, any package manifest or lockfile, lint/test/bundler
-# configs, .npmrc (registry redirect), node/tool version pins, makefiles,
-# Dockerfiles, compose files, monorepo runners (turbo.json, nx.json,
-# justfile, Taskfile.*) — must not merge on the strength of a check the PR
-# itself rewrote: the gate cannot judge what supplies it. Same rule as
-# BMB's risky-path gate: red until a human adds `human-reviewed`. Agents
-# never add it — that is a NORM, not a technical control: the agent's gh
-# token IS Sam's login, so actor checks can exclude bots and strangers but
-# cannot tell Sam's own token from Sam.
+# scripts|tools|bin at any depth, any package manifest or lockfile, lint/
+# test/bundler configs, test setup/globalSetup files, .npmrc (registry
+# redirect), node/tool version pins, makefiles, Dockerfiles, compose files,
+# monorepo runners (turbo.json, nx.json, justfile, Taskfile.*), coverage
+# config (.c8rc, .nycrc, codecov.yml) — must not merge on the strength of a
+# check the PR itself rewrote: the gate cannot judge what supplies it.
+# Same rule as BMB's risky-path gate: red until a human adds
+# `human-reviewed`. Agents never add it — that is a NORM, not a technical
+# control: the agent's gh token IS Sam's login, so actor checks can
+# exclude bots and strangers but cannot tell Sam's own token from Sam.
 #
-# THE BINDING (bb-review rounds 8-14): a label carries no sha (verified —
+# THE BINDING (bb-review rounds 8-15): a label carries no sha (verified —
 # issue-events labeled.commit_id is null), and an APPROVED review cannot
 # exist (GitHub refuses approval of your own PR; agents author under Sam's
-# login). The sha-binding therefore lives in a label the GATE writes: a
-# `labeled` event for human-reviewed carries the head the human was
-# looking at in pull_request.head.sha; the gate records it as `hr-<sha>`.
-# Every run then requires `hr-<this head>` applied by github-actions[bot]
-# (the gate) AND human-reviewed applied by the owner — both proven through
-# issue events, not just the label list. A label applied to head X can
-# never bless head Y; a head-changing event strips both labels so the
-# approval must be re-earned. RESIDUAL (stated, not closed): any actor
-# using Sam's own token, or a workflow given a write token by a PR that
-# modifies it, can mint these labels — the defense is that only a human
-# SHOULD know to, same trust model as BMB.
+# login). The sha-binding therefore lives in a label the GATE writes:
+# `hr-<sha>`. It is minted two ways, both provable through issue events:
+#   (a) a `labeled` run for human-reviewed writes hr-<event head sha>;
+#   (b) any run that finds human-reviewed present but hr-<sha> missing
+#       (the labeled run was dropped by GitHub's pending-run replacement)
+#       writes it RECOVERED — only when the owner's labeled event postdates
+#       the head's LATEST pull_request run created_at (its most recent
+#       arrival) and the last unlabeled event.
+# Provenance then requires the ordered chain
+#   last unlabeled < owner's human-reviewed label < gate's hr-<sha> write —
+# a stale event can never satisfy it, and a collaborator adding both names
+# by hand fails the actor checks. RESIDUAL (stated, not closed): any actor
+# using Sam's own token, or a workflow a PR gives a write token, can mint
+# labels — the defense is that only a human SHOULD know to.
 #
 # Test files themselves are deliberately NOT gated — ci.yml's own awk
 # floor (# tests >= 62) fails closed on deletion or discovery loss.
@@ -42,14 +46,17 @@
 #   * newline-in-path / rename evasion: jq matching on whole JSON strings;
 #     previous_filename checked too.
 #   * moved-head overwrite: the live head is re-fetched before EVERY exit
-#     that could report green.
+#     that could report green, and again right before the hr- write.
 #   * compare files paginate to the API's 3000-file cap — >=3000 fails
 #     closed.
-#   * dropped-writer: concurrency is keyed on PR + ACTION, so a routine
-#     `edited` can never cancel the pending `labeled` run that alone can
-#     write `hr-<sha>` (GITHUB_TOKEN label writes do NOT re-fire events,
-#     so the write is invisible to later runs — the labeled run is the
-#     only writer and must not be dropped).
+#   * dropped-writer / dropped-strip: concurrency is keyed on PR + ACTION
+#     + label name, so unrelated events cannot replace the pending run
+#     that writes or strips — and the recovery write closes the rest.
+#   * strip replay: a manual re-run (run_attempt > 1) never strips — an
+#     old synchronize re-run cannot wipe a live approval.
+#   * strip is verified: labels are re-fetched after every strip attempt
+#     and survivors fail the run; repo-level hr- labels are deleted too,
+#     so the repo label list does not grow per approval.
 #   * log injection: filenames print through jq @json, never raw.
 #   * org move: OWNER is repository_owner — on a personal repo that IS
 #     Sam's login; the job fails LOUDLY if the owner is an Organization.
@@ -74,13 +81,14 @@ on:
 permissions:
   contents: read
   pull-requests: read # compare
-  issues: write # write hr-<sha>, strip stale labels
+  issues: write # write/strip approval labels
+  actions: read # head-arrival time from pull_request runs
 
 concurrency:
-  # Keyed on PR + ACTION, not head sha alone: a pending `labeled` run (the
-  # only writer of hr-<sha>) must not be replaced by an `edited` run, and
-  # two PRs sharing a head sha must not share a group.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}
+  # Keyed on PR + ACTION + label name: a routine `edited` can never
+  # replace the pending `labeled` run (the prime writer of hr-<sha>), and
+  # an unrelated unlabel cannot replace a pending strip.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}-${{ github.event.label.name }}
   cancel-in-progress: false
 
 jobs:
@@ -101,6 +109,7 @@ jobs:
       SENDER_TYPE: ${{ github.event.sender.type }}
       OWNER: ${{ github.repository_owner }}
       OWNER_TYPE: ${{ github.event.repository.owner.type }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - name: Gate CI-definition changes on human-reviewed
         shell: bash
@@ -131,7 +140,7 @@ jobs:
               ($f | startswith(".github/"))
               or ($f | startswith(".husky/"))
               or ($f | startswith(".yarn/"))
-              or ($f | test("(^|/)scripts/"))
+              or ($f | test("(^|/)(scripts|tools|bin)/"))
               or (($f | ascii_downcase | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
@@ -142,6 +151,7 @@ jobs:
                   or ($b | startswith("vite.config."))
                   or ($b | startswith("jest.config."))
                   or ($b | startswith("playwright.config."))
+                  or ($b | startswith("cypress.config."))
                   or ($b | startswith("babel.config."))
                   or ($b | startswith("webpack.config."))
                   or ($b | startswith("rollup.config."))
@@ -150,7 +160,11 @@ jobs:
                   or ($b | startswith("prettier.config."))
                   or ($b | startswith("tailwind.config."))
                   or ($b | startswith("commitlint.config."))
+                  or ($b | startswith("lint-staged.config."))
                   or ($b | startswith("taskfile."))
+                  or ($b | startswith("setuptests."))
+                  or ($b | startswith("test-setup."))
+                  or ($b | startswith("globalsetup."))
                   or ($b | startswith("dockerfile"))
                   or ($b | startswith("docker-compose."))
                   or ($b | startswith(".babelrc"))
@@ -160,8 +174,11 @@ jobs:
                   or ($b | startswith(".nycrc"))
                   or ($b | startswith(".lintstagedrc"))
                   or ($b | startswith(".prettierrc"))
+                  or ($b | startswith(".stylelintrc"))
+                  or ($b | startswith(".dependency-cruiser."))
+                  or ($b | startswith("knip."))
                   or ($b | endswith(".mk"))
-                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","compose.yml","compose.yaml" ] | index($b)));
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","compose.yml","compose.yaml","codecov.yml" ] | index($b)));
             .[] | .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
@@ -172,18 +189,24 @@ jobs:
           while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
           # BINDING, write side: a `labeled` event for human-reviewed by the
-          # owner records the head it was applied to as `hr-<sha>`.
-          # GITHUB_TOKEN writes do not re-fire events, so this is the ONLY
-          # writer — protected by the per-action concurrency key.
+          # owner records the head it was applied to as `hr-<sha>`. Live
+          # head is re-checked right before the POST — a race with a
+          # synchronize strip must not write a stale record (round 15 P3).
           if [ "$ACTION" = "labeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ] && [ "$SENDER" = "$OWNER" ] && [ "$SENDER_TYPE" != "Bot" ]; then
-            gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
-            echo "recorded hr-$HEAD_SHA — the label is bound to this head"
+            live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+            if [ "$live" = "$HEAD_SHA" ]; then
+              gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
+              echo "recorded hr-$HEAD_SHA — the label is bound to this head"
+            else
+              echo "head moved to $live before the write — no hr- record; the newer head's run decides"
+              exit 1
+            fi
           fi
 
           # BINDING, erase side: a head/base change or an unlabel voids the
-          # approval — strip human-reviewed and every hr-* label, then
-          # RE-FETCH and fail closed if any survived (bb-review round 14).
-          if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; } || { [ "$ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ]; }; then
+          # approval. Skipped on manual re-runs (run_attempt > 1) — replaying
+          # an old strip must not wipe a live approval (round 15 P3).
+          if [ "$RUN_ATTEMPT" = "1" ] && { [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; } || { [ "$ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ]; }; }; then
             for l in $(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name | select(. == "human-reviewed" or test("^hr-[0-9a-f]{40}$"))'); do
               gh api -X DELETE "repos/$REPO/issues/$PR/labels/$l" >/dev/null 2>&1 || echo "::warning::delete of label $l failed"
             done
@@ -192,29 +215,49 @@ jobs:
               echo "::error::approval labels could not all be cleared on $ACTION — failing closed"
               exit 1
             fi
+            # Repo-level cleanup: strip created hr-<sha> labels from the
+            # repo's label list too, so it does not grow per approval.
+            for l in $(gh api --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name | select(test("^hr-[0-9a-f]{40}$"))'); do
+              gh api -X DELETE "repos/$REPO/labels/$l" >/dev/null 2>&1 || true
+            done
             echo "$ACTION: approval labels stripped (or none present) — a fresh human-reviewed is required for this head"
           fi
 
-          # VALIDATE: labels present AND provenance via issue events —
-          # human-reviewed applied by the owner, hr-<sha> applied by the
-          # gate itself (github-actions[bot]). A collaborator adding both
-          # names by hand fails the actor check.
+          # Issue events once: the provenance chain needs
+          #   last unlabeled < owner labeled(human-reviewed) < bot labeled(hr-<sha>)
+          gh api --paginate "repos/$REPO/issues/$PR/events?per_page=100" > /tmp/ev.json
+          ul=$(jq -sr '[.[][] | select(.event == "unlabeled" and .label.name == "human-reviewed") | .created_at] | last // ""' /tmp/ev.json)
+          hr=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // ""' /tmp/ev.json)
+
           labels=$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name')
           echo "$labels" | grep -qx 'human-reviewed' || {
             echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label after reviewing the CURRENT head. Agents never add it; every new head needs it again."
             exit 1
           }
-          echo "$labels" | grep -qx "hr-$HEAD_SHA" || {
-            echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record) — re-add the label on the current head"
-            exit 1
-          }
+
+          # RECOVERY WRITE: if the hr-<sha> record is missing but the
+          # owner's label provably came AFTER this head's latest arrival —
+          # the latest pull_request run created_at for the sha — and after
+          # the last unlabel, the labeled run that should have written it
+          # was dropped by pending-run replacement. Write it here; the head
+          # is verified live above and below.
+          if ! echo "$labels" | grep -qx "hr-$HEAD_SHA"; then
+            pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq -r '[.workflow_runs[].created_at] | max // empty')
+            if [ -n "$hr" ] && [ -n "$pt" ] && [ "$hr" \> "$pt" ] && [ "$hr" \> "$ul" ]; then
+              gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
+              echo "recovered hr-$HEAD_SHA — the dropped labeled run is healed by the ordering proof"
+            else
+              echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record, and no owner label event provably newer than this head's arrival '${pt:-unknown}') — re-add the label on the current head"
+              exit 1
+            fi
+          fi
+
+          # Re-fetch after the possible write, then the ordered chain:
+          # ul < owner-label < gate hr-write. A stale event satisfies nothing.
           gh api --paginate "repos/$REPO/issues/$PR/events?per_page=100" > /tmp/ev.json
-          ok=$(jq -sr --arg owner "$OWNER" --arg sha "hr-$HEAD_SHA" '
-            ([.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner)] | last) as $hr
-            | ([.[][] | select(.event == "labeled" and .label.name == $sha and .actor.login == "github-actions[bot]")] | last) as $sb
-            | if $hr != null and $sb != null then "yes" else "no" end' /tmp/ev.json)
-          if [ "$ok" != "yes" ]; then
-            echo "::error::provenance failed — need human-reviewed applied by $OWNER and hr-$HEAD_SHA applied by github-actions[bot]; labels added any other way do not count"
+          sb=$(jq -sr --arg sha "hr-$HEAD_SHA" '[.[][] | select(.event == "labeled" and .label.name == $sha and .actor.login == "github-actions[bot]") | .created_at] | last // ""' /tmp/ev.json)
+          if [ -z "$hr" ] || [ -z "$sb" ] || [ ! "$hr" \> "$ul" ] || [ ! "$sb" \> "$hr" ]; then
+            echo "::error::provenance failed — need owner labeled at '${hr:-never}' after last unlabeled '${ul:-never}' and gate write at '${sb:-never}' after it"
             exit 1
           fi
 
@@ -225,4 +268,4 @@ jobs:
             exit 1
           fi
 
-          echo "human-reviewed (owner) + hr-$HEAD_SHA (gate) on the live head — gate satisfied"
+          echo "human-reviewed (owner, fresh) + hr-$HEAD_SHA (gate) on the live head — gate satisfied"
