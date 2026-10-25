@@ -140,7 +140,7 @@ jobs:
               ($f | startswith(".github/"))
               or ($f | startswith(".husky/"))
               or ($f | startswith(".yarn/"))
-              or ($f | test("(^|/)(scripts|tools|bin)/"))
+              or ($f | ascii_downcase | test("(^|/)(scripts|tools|bin|tests?|__tests__|e2e|vitest-setup|test-setup|eslint-rules)/"))
               or (($f | ascii_downcase | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
@@ -177,8 +177,10 @@ jobs:
                   or ($b | startswith(".stylelintrc"))
                   or ($b | startswith(".dependency-cruiser."))
                   or ($b | startswith("knip."))
+                  or ($b | startswith(".codecov."))
+                  or ($b | startswith(".env"))
                   or ($b | endswith(".mk"))
-                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","compose.yml","compose.yaml","codecov.yml" ] | index($b)));
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".prettierignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","lerna.json","compose.yml","compose.yaml","codecov.yml",".browserslistrc" ] | index($b)));
             .[] | .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
@@ -195,6 +197,10 @@ jobs:
           if [ "$ACTION" = "labeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ] && [ "$SENDER" = "$OWNER" ] && [ "$SENDER_TYPE" != "Bot" ]; then
             live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
             if [ "$live" = "$HEAD_SHA" ]; then
+              # DELETE first: re-adding an existing label creates NO event,
+              # which would leave provenance pointing at a stale write
+              # (bb-review round 16 P2). 404 when absent is fine.
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/hr-$HEAD_SHA" >/dev/null 2>&1 || true
               gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
               echo "recorded hr-$HEAD_SHA — the label is bound to this head"
             else
@@ -220,6 +226,9 @@ jobs:
             for l in $(gh api --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name | select(test("^hr-[0-9a-f]{40}$"))'); do
               gh api -X DELETE "repos/$REPO/labels/$l" >/dev/null 2>&1 || true
             done
+            # Repo-level hr- labels are NOT deleted: removing a repo label
+            # strips it from EVERY open PR and could un-approve a sibling
+            # (bb-review round 16 P2). Label-list growth is cosmetic.
             echo "$ACTION: approval labels stripped (or none present) — a fresh human-reviewed is required for this head"
           fi
 
@@ -242,8 +251,11 @@ jobs:
           # was dropped by pending-run replacement. Write it here; the head
           # is verified live above and below.
           if ! echo "$labels" | grep -qx "hr-$HEAD_SHA"; then
-            pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq -r '[.workflow_runs[].created_at] | max // empty')
+            # --jq takes the EXPRESSION as its value — there is no -r flag;
+            # gh already prints raw strings (bb-review round 16 P1).
+            pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq '[.workflow_runs[].created_at] | max // empty')
             if [ -n "$hr" ] && [ -n "$pt" ] && [ "$hr" \> "$pt" ] && [ "$hr" \> "$ul" ]; then
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/hr-$HEAD_SHA" >/dev/null 2>&1 || true
               gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
               echo "recovered hr-$HEAD_SHA — the dropped labeled run is healed by the ordering proof"
             else
