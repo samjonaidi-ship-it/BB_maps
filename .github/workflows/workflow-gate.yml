@@ -30,7 +30,7 @@
 # using Sam's own token, or a workflow a PR gives a write token, can mint
 # labels — the defense is that only a human SHOULD know to.
 #
-# Test files and test directories are deliberately NOT gated — ci.yml's own awk
+# Test/spec FILES are deliberately NOT gated — ci.yml's own awk
 # floor (# tests >= 62) fails closed on deletion or discovery loss.
 # Assertion-hollowing keeps the count, and NO filename gate can see that —
 # it is what the human review is for.
@@ -128,10 +128,14 @@ jobs:
 
           # The diff pinned to the EVENT's head sha, via compare — never the
           # live head's file list. Paginate to the API's own 3000-file cap.
-          gh api --paginate "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA?per_page=300" > /tmp/cmp.json
+          gh api --paginate "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA?per_page=100" > /tmp/cmp.json
           total=$(jq -s 'map(.files | length) | add' /tmp/cmp.json)
-          if [ "${total:-0}" -ge 3000 ]; then
-            echo "::error::PR reports $total changed files (>= 3000 API cap) — cannot prove no gate file is past the cap; failing closed"
+          # Cross-check against the PR's own count — a short read must never
+          # look like a small PR (bb-review round 19 P2). Live head was
+          # verified equal to HEAD_SHA, so changed_files is for this head.
+          expected=$(gh api "repos/$REPO/pulls/$PR" --jq '.changed_files')
+          if [ "${total:-0}" -lt "${expected:-3000}" ] || [ "${total:-0}" -ge 3000 ]; then
+            echo "::error::fetched $total of $expected changed files — cannot prove no gate file is unfetched; failing closed"
             exit 1
           fi
 
@@ -140,7 +144,11 @@ jobs:
               ($f | startswith(".github/"))
               or ($f | startswith(".husky/"))
               or ($f | startswith(".yarn/"))
-              or ($f | ascii_downcase | test("(^|/)(scripts|tools|bin|vitest-setup|test-setup|eslint-rules)/"))
+              or ($f | ascii_downcase | test("^(scripts|tools|bin)/"))
+              or ($f | ascii_downcase | test("(^|/)(vitest-setup|test-setup|eslint-rules)/"))
+              # test dirs: NOT *.test.*/​*.spec.* — setup/fixture files in
+              # there change what CI proves; test bodies do not (round 19).
+              or (($f | ascii_downcase | test("(^|/)(tests?|__tests__|e2e)/")) and (($f | ascii_downcase | (contains(".test.") or contains(".spec."))) | not))
               or (($f | ascii_downcase | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
@@ -166,6 +174,7 @@ jobs:
                   or ($b | startswith("commitlint.config."))
                   or ($b | startswith("lint-staged.config."))
                   or ($b | startswith("taskfile."))
+                  or ($b | startswith("setup."))
                   or ($b | startswith("setuptests."))
                   or ($b | startswith("setup-tests."))
                   or ($b | startswith("test-setup."))
@@ -260,7 +269,11 @@ jobs:
             # --jq takes the EXPRESSION as its value — there is no -r flag;
             # gh already prints raw strings (bb-review round 16 P1).
             pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq '[.workflow_runs[].created_at] | max // empty')
-            if [ -n "$hr" ] && [ -n "$pt" ] && [ "$hr" \> "$pt" ] && [ "$hr" \> "$ul" ]; then
+            # ...and AFTER the last head-changing timeline event — a
+            # force-push back to an older sha must not let a label for a
+            # different head mint its hr- record (round 19 P2).
+            ht=$(jq -sr '[.[][] | select(.event == "head_ref_force_pushed" or .event == "reopened" or .event == "base_ref_changed") | .created_at] | max // ""' /tmp/ev.json)
+            if [ -n "$hr" ] && [ -n "$pt" ] && [ "$hr" \> "$pt" ] && [ "$hr" \> "$ul" ] && [ "$hr" \> "$ht" ]; then
               gh api -X DELETE "repos/$REPO/issues/$PR/labels/hr-$HEAD_SHA" >/dev/null 2>&1 || true
               gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
               echo "recovered hr-$HEAD_SHA — the dropped labeled run is healed by the ordering proof"
