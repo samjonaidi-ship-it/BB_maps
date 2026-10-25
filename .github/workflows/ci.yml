@@ -1,0 +1,124 @@
+# BB_Maps CI | v1.0.0 | 2026-10-25 | BB
+#
+# First CI for this repo — branch protection exists but had no check to
+# require, so every push to main deployed unreviewed. This workflow gives
+# protection a required context: the job name `CI`.
+#
+# Scope is deliberately what the repo can honestly run (each command verified
+# locally, exit 0 — on node 26; the job itself pins node 20, the Dockerfile
+# runtime):
+#   npm ci                            — installs clean from package-lock.json
+#   npm run lint                      — eslint src --max-warnings 0
+#   npm test                          — node --test (62 tests, ~45 s, no network:
+#                                       routes are exercised through
+#                                       fastify.inject with stub upstreams)
+#   npm audit --audit-level=critical  — same severity threshold as BMB, but
+#                                       ADVISORY here (continue-on-error) so
+#                                       a new advisory or registry outage
+#                                       cannot block unrelated merges
+#
+# No devin-gate / risky-path job: those live in repos that carry
+# scripts/check-risky-paths.mjs and the devin-gate workflow, which this repo
+# does not (yet). Adding them is a follow-up, not part of first CI.
+#
+# No `paths:` filter under `on:` — a required check that can be skipped by
+# path filtering reports nothing and blocks the merge (BMB ci.yml v2.6.1
+# header documents the same rule).
+#
+# This PR also fixes the test script: `node --test src/**/*.test.js` was
+# silently broken on this repo's runtime. Glob args to --test need node 21+,
+# and on a POSIX shell `**` expands to ONE level — so on node 20 (the
+# Dockerfile runtime) `npm test` ran src/routes/*.test.js only and skipped
+# src/refresh-scheduler.test.js. Bare `node --test` scans cwd recursively,
+# skips node_modules and dot-directories (verified: a probe .test.js under
+# .claude/ was NOT picked up), and refresh-scheduler.test.js needs repo-root
+# cwd anyway (it resolve()s Dockerfile and refresh-maps.sh).
+
+name: CI
+
+# No secrets and no write needs: pin the token to read-only so a compromised
+# dependency running under `npm ci` / `npm test` on a push to main gets a
+# token that can do nothing but read (bb-review P2, 2026-10-25).
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Per-ref group: a newer push to a PR cancels the older run; push-to-main
+  # runs get their own group keyed by sha so every main commit gets a verdict
+  # (same fix as BMB ci.yml v2.6.0 — Actions keeps only ONE pending run per
+  # group, so a shared main group would silently drop a verdict).
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: UTC # matches the Railway/production runtime convention (BMB suite)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node 20 (the Dockerfile runtime)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      # `npm test` runs bare `node --test`, which exits 0 when it discovers
+      # ZERO test files — a silent green check. Force the TAP reporter so the
+      # summary counters (`# tests`/`# pass`/`# fail`) are version-stable,
+      # then assert on the summary itself: at least the 62 tests that exist
+      # today, all passing, none failing, AND the refresh-scheduler.test.js
+      # tests (named `refresh-maps.sh: …`) — that top-level file is the one
+      # silent discovery misses (bb-review P2, 2026-10-25).
+      # `shell: bash` is explicit so the tee'd pipeline runs under
+      # -eo pipefail: without it a failed npm test could return tee's 0
+      # (bb-review P1). The TAP assertions below do not depend on the pipe
+      # status either way — a failing run prints # fail >= 1.
+      - name: Test
+        shell: bash
+        run: |
+          npm test -- --test-reporter=tap 2>&1 | tee test-output.txt
+          # The 62 floor is a ratchet: lower it in the same PR that removes
+          # or consolidates tests, or CI goes red for no visible reason.
+          # No describe()/suite()/subtest exists in this suite (checked
+          # 2026-10-25), so node 20 counts # tests the same way node 26 does —
+          # the 62 measured locally transfers. If a future node 20 counts
+          # differently, THIS PR's own run is the check and fails closed.
+          # cancelled==0 and skipped==0 too: AGENTS.md §3 — a cancelled or
+          # skipped test proved nothing, so they fail the gate outright
+          # (bb-review P2, round 5).
+          awk '/^# tests /{t=$3+0} /^# pass /{p=$3+0} /^# fail /{f=$3+0} /^# cancelled /{c=$3+0} /^# skipped /{s=$3+0} END{exit !(t>=62 && p>=62 && f==0 && c==0 && s==0)}' test-output.txt
+          # Anchored to a TAP result line, not a bare substring — a stack
+          # trace or an error message mentioning the script must not satisfy
+          # it (bb-review P2, round 4). Skipped refresh-maps.sh tests are
+          # already impossible here because the awk above fails on any
+          # # skipped > 0.
+          grep -Eq '^ok [0-9]+ - refresh-maps\.sh:' test-output.txt
+
+      # Advisory, never blocking: npm audit answers from a live advisory feed,
+      # so a NEW critical advisory on a transitive dep — or a registry 5xx —
+      # would turn the required check red on every unrelated PR, including the
+      # one that fixes the dep (bb-review P2, round 3). Findings still show in
+      # the run log; BMB keeps the same gate required there because its
+      # dependency surface is managed more tightly. Promote to blocking in a
+      # follow-up if Sam wants it.
+      - name: Audit (critical only, advisory)
+        continue-on-error: true
+        run: npm audit --audit-level=critical
