@@ -1,8 +1,8 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
 # A PR that changes what CI RUNS — anything under .github/, .husky/, .yarn/,
-# scripts|tools|bin at any depth, any package manifest or lockfile, lint/
-# test/bundler configs, test setup/globalSetup files, .npmrc (registry
+# scripts|tools|bin|vitest-setup|test-setup|eslint-rules at any depth, any
+# package manifest or lockfile, lint/test/bundler configs, .npmrc (registry
 # redirect), node/tool version pins, makefiles, Dockerfiles, compose files,
 # monorepo runners (turbo.json, nx.json, justfile, Taskfile.*), coverage
 # config (.c8rc, .nycrc, codecov.yml) — must not merge on the strength of a
@@ -30,7 +30,7 @@
 # using Sam's own token, or a workflow a PR gives a write token, can mint
 # labels — the defense is that only a human SHOULD know to.
 #
-# Test files themselves are deliberately NOT gated — ci.yml's own awk
+# Test files and test directories are deliberately NOT gated — ci.yml's own awk
 # floor (# tests >= 62) fails closed on deletion or discovery loss.
 # Assertion-hollowing keeps the count, and NO filename gate can see that —
 # it is what the human review is for.
@@ -140,7 +140,7 @@ jobs:
               ($f | startswith(".github/"))
               or ($f | startswith(".husky/"))
               or ($f | startswith(".yarn/"))
-              or ($f | ascii_downcase | test("(^|/)(scripts|tools|bin|tests?|__tests__|e2e|vitest-setup|test-setup|eslint-rules)/"))
+              or ($f | ascii_downcase | test("(^|/)(scripts|tools|bin|vitest-setup|test-setup|eslint-rules)/"))
               or (($f | ascii_downcase | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
@@ -260,7 +260,7 @@ jobs:
               gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
               echo "recovered hr-$HEAD_SHA — the dropped labeled run is healed by the ordering proof"
             else
-              echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record, and no owner label event provably newer than this head's arrival '${pt:-unknown}') — re-add the label on the current head"
+              echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record, and no owner label event provably newer than this head's arrival '${pt:-unknown}') — REMOVE 'human-reviewed', then add it again on the current head (re-adding a present label fires no event)"
               exit 1
             fi
           fi
