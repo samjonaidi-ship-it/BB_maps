@@ -1,0 +1,88 @@
+# BB_Maps workflow-change gate | v1.0.0 | 2026-10-25 | BB
+#
+# A PR that touches .github/workflows/ or .github/actions/ must not merge on
+# the strength of a check the PR itself rewrote — the gate cannot judge what
+# supplies it (estate gotcha; Devin SEC finding on PR #27). Same rule as
+# BMB's risky-path gate: it stays red until a human adds the
+# `human-reviewed` label. Agents never add that label, so a workflow PR
+# parks on Sam, not stuck.
+#
+# WHY pull_request_target AND a file of its own: a `pull_request` workflow
+# runs the PR's OWN copy — a gate inside ci.yml can be edited or deleted by
+# the very diff it gates (bb-review P1 on PR #27; the estate hit this in
+# 2026-09, memory `gate-cannot-judge-what-supplies-it`). pull_request_target
+# runs the BASE branch's copy, so no PR can rewrite this job. The job never
+# checks out PR code — it only reads the changed-file list and labels
+# through the API — so the privileged token stays safe: nothing executable
+# comes from the PR side.
+#
+# Traps this version is written against (estate memory, same gotcha):
+#   * run-time refs: pulls/$PR/files resolves at RUN time; judged against
+#     the live PR it can only over-cover — and `synchronize` strips the
+#     label anyway, so a moved head can never ride an old approval.
+#   * newline-in-path evasion: filtering happens in jq per JSON object
+#     (startswith on the whole filename), never by grepping lines — a path
+#     containing a newline cannot split itself invisible.
+#   * rename evasion: previous_filename is checked too — renaming a
+#     workflow OUT of .github/ still trips the gate.
+#   * concurrency keyed on head.sha, not PR number, so a run can never
+#     cancel the newer head's judgment.
+#   * stale approval: `synchronize` strips human-reviewed BEFORE the check,
+#     so every new head needs a fresh label.
+#
+# NOTE: pull_request_target only runs files that exist on the BASE branch —
+# this file cannot run until it is merged. Its first demonstration is the
+# NEXT PR that touches .github/.
+
+name: Workflow-change gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write # to strip `human-reviewed` on synchronize (stale approval)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false # an older run must not cancel the newer head's judgment
+
+jobs:
+  gate:
+    name: Workflow-change gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+      ACTION: ${{ github.event.action }}
+    steps:
+      - name: Gate workflow/action changes on human-reviewed
+        shell: bash
+        run: |
+          # Filter in jq on the JSON objects — a filename containing a
+          # newline cannot evade startswith the way a grepped line can.
+          hits=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[] | select((.filename|startswith(".github/workflows/") or startswith(".github/actions/")) or (.previous_filename != null and (.previous_filename|startswith(".github/workflows/") or startswith(".github/actions/")))) | .filename')
+          if [ -z "$hits" ]; then
+            echo "no .github/workflows|actions changes — nothing to gate"
+            exit 0
+          fi
+          echo "gate-critical files changed:"
+          echo "$hits"
+
+          # Stale approval: a push after review must re-earn the label.
+          if [ "$ACTION" = "synchronize" ]; then
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1 || true
+            echo "synchronize: stripped human-reviewed (if present) — a fresh review is required for the new head"
+          fi
+
+          # Exact match computed in jq — label names never enter the script
+          # as text (no injection path, no partial-name match).
+          if [ -z "$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
+            echo "::error::This PR changes .github/(workflows|actions)/ — a human adds the 'human-reviewed' label after review. Agents never add it; every new push needs it again."
+            exit 1
+          fi
+          echo "human-reviewed label present — gate satisfied"
