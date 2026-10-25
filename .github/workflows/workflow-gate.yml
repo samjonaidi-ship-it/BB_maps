@@ -1,12 +1,15 @@
-# BB_Maps workflow-change gate | v1.0.0 | 2026-10-25 | BB
+# BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
-# A PR that touches .github/workflows/ or .github/actions/ must not merge on
-# the strength of a check the PR itself rewrote — the gate cannot judge what
-# supplies it (estate gotcha; Devin SEC finding on PR #27). Same rule as
-# BMB's risky-path gate: it stays red until a human adds the
-# `human-reviewed` label. Agents never add that label — it is a NORM, not a
-# technical control: the agent's gh token is Sam's login, so nothing in this
-# job can tell them apart. Same limitation as BMB's gate.
+# A PR that changes what CI RUNS — .github/workflows/, .github/actions/,
+# package.json / package-lock.json (the scripts the runner invokes and the
+# deps they pull), eslint.config.*, scripts/ — must not merge on the
+# strength of a check the PR itself rewrote: the gate cannot judge what
+# supplies it, and a weakened "test": "exit 0" is the same bypass with a
+# different file (bb-review P2, round 8). Same rule as BMB's risky-path
+# gate: it stays red until a human adds the `human-reviewed` label. Agents
+# never add that label — it is a NORM, not a technical control: the agent's
+# gh token is Sam's login, so nothing in this job can tell them apart. Same
+# limitation as BMB's gate.
 #
 # WHY pull_request_target AND a file of its own: a `pull_request` workflow
 # runs the PR's OWN copy — a gate inside ci.yml can be edited or deleted by
@@ -18,20 +21,26 @@
 # comes from the PR side.
 #
 # Traps this version is written against (estate memory + bb-review rounds):
-#   * run-time refs: pulls/$PR/files resolves at RUN time; judged against
-#     the live PR it can only over-cover — and `synchronize`/`reopened`/
-#     `edited` strip the label anyway, so a moved or retargeted head can
-#     never ride an old approval.
 #   * newline-in-path evasion: filtering happens in jq per JSON object
 #     (startswith on the whole filename), never by grepping lines — a path
 #     containing a newline cannot split itself invisible.
-#   * rename evasion: previous_filename is checked too — renaming a
-#     workflow OUT of .github/ still trips the gate.
-#   * stale approval fails CLOSED: after a strip event, the labels are
-#     re-fetched — if `human-reviewed` is still there (403, rate limit,
-#     5xx on the DELETE), the step fails instead of passing on it.
-#   * 3000-file API cap: if the PR reports >= 3000 changed files the gate
-#     fails closed rather than passing silently.
+#   * rename evasion: previous_filename is checked too — renaming a gate
+#     file OUT of scope still trips the gate.
+#   * stale approval fails CLOSED: on synchronize/reopened/base-edited the
+#     label is stripped, then labels are RE-FETCHED — a label that survived
+#     the DELETE (403/5xx/rate-limit) fails the step instead of passing.
+#   * edited over-strip: `edited` fires on every title/body change and
+#     AGENTS.md §7 makes the PR body the change record — it strips ONLY
+#     when the event carries changes.base (a real retarget).
+#   * labeled TOCTOU: a `labeled` run also walks the issue timeline and
+#     requires the label's created_at to postdate the last push event —
+#     a click on a stale page cannot bless a head nobody saw.
+#   * moved-head overwrite: before going green the job re-fetches the live
+#     head sha and fails if it is not the head this run was triggered for —
+#     an older run can never stamp green onto a newer head.
+#   * 3000-file API cap: >= 3000 changed files fails closed.
+#   * log injection: filenames are printed through jq @json, never raw —
+#     a path containing ::workflow-command:: text cannot reach the log.
 #   * concurrency keyed on head.sha, not PR number, so a run can never
 #     cancel the newer head's judgment.
 #
@@ -46,8 +55,8 @@ name: Workflow-change gate
 
 on:
   pull_request_target:
-    # edited too: retargeting the PR to a different base re-opens the
-    # question of what the reviewed head was.
+    # edited is here only for base retargets — the step ignores it unless
+    # github.event.changes.base is present.
     types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 permissions:
@@ -69,8 +78,10 @@ jobs:
       PR: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
       ACTION: ${{ github.event.action }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_CHANGED: ${{ github.event.changes.base && 'yes' || '' }}
     steps:
-      - name: Gate workflow/action changes on human-reviewed
+      - name: Gate CI-definition changes on human-reviewed
         shell: bash
         run: |
           # One fetch, slurped — the 3000-file API cap would otherwise pass
@@ -78,39 +89,66 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" > pr-files.json
           total=$(jq -s 'map(length) | add' pr-files.json)
           if [ "${total:-0}" -ge 3000 ]; then
-            echo "::error::PR reports $total changed files (>= 3000 API cap) — cannot prove no workflow file is past the cap; failing closed"
+            echo "::error::PR reports $total changed files (>= 3000 API cap) — cannot prove no gate file is past the cap; failing closed"
             exit 1
           fi
 
           # Filter in jq per JSON object — a filename containing a newline
           # cannot evade startswith the way a grepped line can.
-          hits=$(jq -sr '.[] | .[] | select((.filename|startswith(".github/workflows/") or startswith(".github/actions/")) or (.previous_filename != null and (.previous_filename|startswith(".github/workflows/") or startswith(".github/actions/")))) | .filename' pr-files.json)
+          hits=$(jq -sr '.[] | .[] | select(
+            (.filename | startswith(".github/") or . == "package.json" or . == "package-lock.json" or startswith("eslint.config.") or startswith("scripts/"))
+            or (.previous_filename != null and (.previous_filename | startswith(".github/") or . == "package.json" or . == "package-lock.json" or startswith("eslint.config.") or startswith("scripts/")))
+          ) | .filename' pr-files.json)
           if [ -z "$hits" ]; then
-            echo "no .github/workflows|actions changes — nothing to gate"
+            echo "no CI-definition changes — nothing to gate"
             exit 0
           fi
+          # Filenames can carry control characters — never write them raw.
           echo "gate-critical files changed:"
-          echo "$hits"
+          while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
           # Stale approval: on any event that can mean the head or base
-          # changed, the label must be re-earned. Strip it, then RE-FETCH —
-          # a label that survived the DELETE (403/5xx/rate-limit) fails the
-          # step instead of passing (bb-review P1, round 7).
-          case "$ACTION" in
-            synchronize|reopened|edited)
-              gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1
-              if [ -n "$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-                echo "::error::$ACTION requires a fresh human-reviewed label, and the old one could not be cleared — failing closed"
-                exit 1
-              fi
-              echo "$ACTION: human-reviewed stripped (or was absent) — a fresh review is required for this head"
-              ;;
-          esac
+          # changed, the label must be re-earned. edited counts ONLY on a
+          # base retarget — body edits must not strip (bb-review P2).
+          if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; }; then
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1 || true
+            # Re-fetch — a surviving label (403/5xx/404-race) fails closed.
+            if [ -n "$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
+              echo "::error::$ACTION requires a fresh human-reviewed label, and the old one could not be cleared — failing closed"
+              exit 1
+            fi
+            echo "$ACTION: human-reviewed stripped (or was absent) — a fresh review is required for this head"
+          fi
 
           # Exact match computed in jq — label names never enter the script
           # as text (no injection path, no partial-name match).
           if [ -z "$(gh api "repos/$REPO/issues/$PR/labels" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-            echo "::error::This PR changes .github/(workflows|actions)/ — a human adds the 'human-reviewed' label after review. Agents never add it; every new head needs it again."
+            echo "::error::This PR changes CI definition files — a human adds the 'human-reviewed' label after review. Agents never add it; every new head needs it again."
             exit 1
           fi
-          echo "human-reviewed label present — gate satisfied"
+
+          # labeled TOCTOU: the label must postdate the last push on the
+          # timeline, so a click on a stale page cannot bless an unseen head.
+          if [ "$ACTION" = "labeled" ]; then
+            gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
+            verdict=$(jq -sr '[.[][]]
+              | (map(select(.event == "labeled" and .label.name == "human-reviewed") | .created_at) | last) as $lt
+              | (map(select(.event == "committed") | .committer.date) + map(select(.event == "head_ref_force_pushed") | .created_at) | max) as $pt
+              | if $lt == null or $pt == null then "unknown"
+                elif $lt > $pt then "ok"
+                else "stale" end' /tmp/tl.json)
+            if [ "$verdict" != "ok" ]; then
+              echo "::error::human-reviewed label is $verdict relative to the last push — it must be added after the head it approves"
+              exit 1
+            fi
+          fi
+
+          # Moved-head overwrite: never let a run stamp green onto a head it
+          # was not triggered for — the newer head's own run decides.
+          live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          if [ "$live" != "$HEAD_SHA" ]; then
+            echo "::error::this run was triggered for $HEAD_SHA but the live head is $live — the newer head's run decides"
+            exit 1
+          fi
+
+          echo "human-reviewed label present on the live head — gate satisfied"
