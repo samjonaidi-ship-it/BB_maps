@@ -1,55 +1,60 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
-# A PR that changes what CI RUNS — anything under .github/, the package
-# manifests and lockfiles whose scripts the runner invokes, lint/test/
-# runner configs, .npmrc (registry redirect), node version pins, scripts/ —
-# must not merge on the strength of a check the PR itself rewrote: the gate
+# A PR that changes what CI RUNS — anything under .github/, any package
+# manifest or lockfile (root or nested) whose scripts the runner invokes,
+# lint/test/bundler configs, .npmrc (registry redirect), node/tool version
+# pins, .husky/, scripts/, Makefile, Dockerfile, docker-compose.yml — must
+# not merge on the strength of a check the PR itself rewrote: the gate
 # cannot judge what supplies it, and a weakened "test": "exit 0" or an
-# empty vitest include is the same bypass with a different file
-# (bb-review P2s, rounds 8-9). Same rule as BMB's risky-path gate: it stays
-# red until a human adds the `human-reviewed` label. Agents never add that
-# label — it is a NORM, not a technical control: the agent's gh token is
-# Sam's login, so nothing in this job can tell them apart. Same limitation
-# as BMB's gate.
+# empty vitest include is the same bypass with a different file. Same rule
+# as BMB's risky-path gate: red until a human adds `human-reviewed`. Agents
+# never add that label — it is a NORM, not a technical control: the agent's
+# gh token IS Sam's login, so actor checks can exclude bots and strangers
+# but cannot tell Sam's own token from Sam. Same limitation as BMB's gate.
+#
+# Test files themselves are deliberately NOT gated here — ci.yml's own awk
+# floor (# tests >= 62) makes deleting or hollowing a suite fail the
+# required check directly, and gating every test edit on a human label
+# would park ordinary work on Sam.
 #
 # WHY pull_request_target AND a file of its own: a `pull_request` workflow
 # runs the PR's OWN copy — a gate inside ci.yml can be edited or deleted by
 # the very diff it gates (bb-review P1 on PR #27; the estate hit this in
 # 2026-09, memory `gate-cannot-judge-what-supplies-it`). pull_request_target
-# runs the BASE branch's copy, so no PR can rewrite this job. The job never
-# checks out PR code — it only reads the changed-file list, labels and
-# timeline through the API — so the privileged token stays safe: nothing
-# executable comes from the PR side.
+# runs the BASE branch's copy. The job never checks out PR code — it reads
+# files, labels, timeline and run metadata through the API only.
 #
-# Traps this version is written against (estate memory + bb-review rounds):
-#   * newline-in-path evasion: filtering happens in jq per JSON object,
-#     never by grepping lines — a path containing a newline cannot split
-#     itself invisible.
-#   * rename evasion: previous_filename is checked too.
-#   * stale approval fails CLOSED on TWO legs: head-changing events strip
-#     the label AND every run that finds it present also proves its
-#     created_at postdates the push that produced this head — measured
-#     server-side by the earliest check-suite created_at on the head sha,
-#     never by committer.date, which is client-set.
-#   * edited over-strip: `edited` strips only when the event carries
-#     changes.base (a real retarget); body edits are routine per AGENTS §7.
-#   * pending-run replacement: GitHub may cancel a PENDING same-group run —
-#     that can skip a strip, but it cannot skip the timeline freshness
-#     check, which runs on every event that reaches the label check.
-#   * moved-head overwrite: before going green the job re-fetches the live
-#     head sha and fails if it is not the head this run was triggered for.
-#   * 3000-file API cap and 30-label default page: both bounded, both fail
-#     closed past the cap (--paginate everywhere else).
+# Freshness model: a label is valid for a head ONLY if it was applied
+# after that head arrived on the PR. Arrival time is server-side: the
+# earliest pull_request_target run created_at for the head sha — a normal
+# push, a force-push and a branch reset all create a fresh synchronize run
+# at arrival, and it cannot be backdated like committer.date (bb-review
+# round 9 P1 / round 10 P2). A label older than that is stale and the
+# step fails; a head-changing event also strips it (belt), but ONLY when
+# proven stale — a label Sam adds in the seconds before the synchronize
+# run starts is not destroyed.
+#
+# Other traps written against (estate memory + bb-review rounds):
+#   * newline-in-path / rename evasion: jq startswith on whole JSON
+#     strings; previous_filename checked too.
+#   * edited over-strip: strips only when changes.base is present.
+#   * pending-run replacement: a cancelled strip cannot open a hole —
+#     freshness is proven every run, not just on labeled.
+#   * moved-head overwrite: success exits only if the live head still
+#     equals the event's head.sha.
+#   * caps that fail closed: >=3000 changed files, label lists paginated.
 #   * log injection: filenames print through jq @json, never raw.
-#   * concurrency keyed on head.sha, so a run can never cancel the newer
-#     head's judgment.
+#   * permissions: actions: read (the runs list), issues: write (the
+#     strip), pull-requests: read, contents: read — nothing else.
 #
-# NOT required by itself: this check only blocks merges once
-# `Workflow-change gate` is added to branch-protection required checks on
-# main (post-merge step for Sam — a diff cannot set that). And
-# pull_request_target only runs files that exist on the BASE branch, so
-# this file cannot run until it is merged — its first demonstration is the
-# NEXT PR that touches .github/.
+# NOT required by itself: this only blocks merges once `Workflow-change
+# gate` is a required check on main (post-merge step for Sam — a diff
+# cannot set that). pull_request_target runs only files on the BASE
+# branch, so this file cannot run until it is merged — its first
+# demonstration is the NEXT PR that touches a gated file. If a head ever
+# arrives with zero gate runs (automation-token push that triggers no
+# workflows), pt is empty and the gate stays red by design — a human
+# re-push or Sam resolves it.
 
 name: Workflow-change gate
 
@@ -62,7 +67,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  issues: write # to strip `human-reviewed` on head-changing events
+  issues: write # to strip `human-reviewed` when it is proven stale
+  actions: read # to read this workflow's runs for the server-side push time
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha }}
@@ -80,6 +86,7 @@ jobs:
       ACTION: ${{ github.event.action }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_CHANGED: ${{ github.event.changes.base && 'yes' || '' }}
+      OWNER: ${{ github.repository_owner }}
     steps:
       - name: Gate CI-definition changes on human-reviewed
         shell: bash
@@ -93,18 +100,27 @@ jobs:
             exit 1
           fi
 
-          # The CI-definition set: files whose change alters what a required
-          # check actually executes. startswith() on the whole JSON string.
+          # The CI-definition set. startswith/endswith on whole JSON
+          # strings — a newline inside a path cannot split itself invisible.
           hits=$(jq -sr 'def crit($f):
               ($f | startswith(".github/"))
               or ($f | startswith("scripts/"))
+              or ($f | startswith(".husky/"))
+              or ($f | endswith("/package.json")) or $f == "package.json"
+              or ($f | endswith("/package-lock.json")) or $f == "package-lock.json"
+              or ($f | endswith("/pnpm-lock.yaml")) or $f == "pnpm-lock.yaml"
+              or ($f | endswith("/yarn.lock")) or $f == "yarn.lock"
               or ($f | startswith("eslint.config."))
               or ($f | startswith(".eslintrc"))
               or ($f | startswith("tsconfig"))
               or ($f | startswith("vitest.config."))
+              or ($f | startswith("vitest.workspace."))
+              or ($f | startswith("vitest.setup."))
+              or ($f | startswith("vite.config."))
               or ($f | startswith("jest.config."))
               or ($f | startswith("playwright.config."))
-              or (["package.json","package-lock.json","pnpm-lock.yaml","yarn.lock",".npmrc",".nvmrc",".node-version",".eslintignore","Makefile","docker-compose.yml","Dockerfile"] | index($f));
+              or ($f | startswith("babel.config."))
+              or ([ "pnpm-workspace.yaml","bun.lockb",".npmrc",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile","docker-compose.yml","Dockerfile" ] | index($f));
             .[] | .[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' pr-files.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
@@ -114,37 +130,47 @@ jobs:
           echo "gate-critical files changed:"
           while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
-          # Stale approval, leg 1: head/base-changing events strip the
-          # label. edited counts ONLY on a base retarget (changes.base).
+          # Timeline once: the last human-reviewed label applied BY THE
+          # REPO OWNER, not by a bot identity (Devin/Codex act under their
+          # own [bot] logins and must not self-approve). Agents share Sam's
+          # login — owner-vs-Sam is a norm, not a control, per the header.
+          gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
+          lt=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // empty' /tmp/tl.json)
+
+          # Server-side arrival time of this head on the PR: the earliest
+          # pull_request_target run created for the head sha — created at
+          # push/reset/reopen time and not backdatable. Empty only when no
+          # run exists for the head (automation-token push) — fail closed.
+          pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request_target&per_page=100" --jq '[.workflow_runs[].created_at] | min // empty')
+
+          # Stale approval, leg 1: on a head/base-changing event strip the
+          # label — but ONLY a proven-stale one (lt absent or lt <= pt). A
+          # fresh label added in the run's startup window is kept
+          # (bb-review round 10 P3).
+          head_changed=0
           if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; }; then
+            head_changed=1
+          fi
+          if [ "$head_changed" = 1 ] && { [ -z "$lt" ] || [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; }; then
             gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1 || true
-            # Re-fetch — a surviving label (403/5xx/rate-limit) fails closed.
             if [ -n "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-              echo "::error::$ACTION requires a fresh human-reviewed label, and the old one could not be cleared — failing closed"
+              echo "::error::$ACTION requires a fresh human-reviewed label, and a stale one could not be cleared — failing closed"
               exit 1
             fi
-            echo "$ACTION: human-reviewed stripped (or was absent) — a fresh review is required for this head"
+            echo "$ACTION: stale-or-absent human-reviewed cleared — a fresh review is required for this head"
           fi
 
-          # Exact match computed in jq — label names never enter the script
-          # as text (no injection path, no partial-name match).
+          # Presence: exact match computed in jq — label names never enter
+          # the script as text.
           if [ -z "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
             echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label after review. Agents never add it; every new head needs it again."
             exit 1
           fi
 
-          # Stale approval, leg 2 — on EVERY event, not only `labeled`: the
-          # label must postdate the push that produced this head. Push time
-          # is measured server-side: the earliest check-suite created_at on
-          # the head sha (ci.yml's pull_request run creates one at push
-          # time). committer.date is client-set and never trusted. A label
-          # added for an older head, or one that survived a cancelled strip
-          # (pending-run replacement), reads STALE here and fails.
-          gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
-          lt=$(jq -sr '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed") | .created_at] | last // empty' /tmp/tl.json)
-          pt=$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-suites?per_page=100" --jq '[.check_suites[].created_at] | min // empty')
+          # Stale approval, leg 2 — EVERY event: the owner-applied label
+          # must postdate the head's server-side arrival time.
           if [ -z "$lt" ] || [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; then
-            echo "::error::human-reviewed (labeled at '${lt:-never}') does not postdate this head's push time ('${pt:-unknown}') — it must be added after the head it approves"
+            echo "::error::human-reviewed (owner-applied at '${lt:-never}') does not postdate this head's arrival ('${pt:-unknown}') — it must be added after the head it approves"
             exit 1
           fi
 
@@ -156,4 +182,4 @@ jobs:
             exit 1
           fi
 
-          echo "human-reviewed label present and fresh on the live head — gate satisfied"
+          echo "human-reviewed label present, owner-applied and fresh on the live head — gate satisfied"
