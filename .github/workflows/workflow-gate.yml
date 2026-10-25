@@ -1,19 +1,32 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
 # A PR that changes what CI RUNS — anything under .github/, any package
-# manifest or lockfile (root or nested) whose scripts the runner invokes,
-# lint/test/bundler configs, .npmrc (registry redirect), node/tool version
-# pins, .husky/, scripts/, Makefile, Dockerfile, docker-compose.yml — must
-# not merge on the strength of a check the PR itself rewrote: the gate
-# cannot judge what supplies it, and a weakened "test": "exit 0" or an
-# empty vitest include is the same bypass with a different file. Same rule
-# as BMB's risky-path gate: red until a human adds `human-reviewed`. Agents
-# never add that label — it is a NORM, not a technical control: the agent's
-# gh token IS Sam's login, so actor checks can exclude bots and strangers
-# but cannot tell Sam's own token from Sam. Same limitation as BMB's gate.
+# manifest or lockfile (any depth — matched on basename), lint/test/bundler
+# configs, .npmrc (registry redirect), node/tool version pins, .husky/,
+# scripts/, Makefile/GNUmakefile/*.mk, Dockerfile*/docker-compose*/compose.*
+# — must not merge on the strength of a check the PR itself rewrote: the
+# gate cannot judge what supplies it, and a weakened "test": "exit 0", an
+# empty vitest include, or a .pnpmfile.cjs is the same bypass with a
+# different file. Same rule as BMB's risky-path gate: red until a human
+# approves AND the `human-reviewed` label is present. Agents never do
+# either — it is a NORM, not a technical control: the agent's gh token IS
+# Sam's login, so actor checks can exclude bots and strangers but cannot
+# tell Sam's own token from Sam. Same limitation as BMB's gate.
+#
+# THE BINDING (bb-review rounds 8-12): labels and timestamps cannot prove
+# WHICH head a human approved — a label click races the next push, and a
+# sha that arrives twice keeps its first arrival time, so a label applied
+# to a benign head could bless a gated sha it returned to. A REVIEW is the
+# only signal GitHub binds to a commit: this gate requires an APPROVED
+# review by the repo owner whose commit_id equals the event's head sha —
+# approval on sha A can never count for sha B. Approval must also postdate
+# the last base_ref_changed timeline event, so retargeting the PR
+# invalidates it. The `human-reviewed` label stays required too — estate
+# convention, and the signal Sam already knows — but it is cosmetic beside
+# the sha-bound approval.
 #
 # Test files themselves are deliberately NOT gated here — ci.yml's own awk
-# floor (# tests >= 62) makes deleting or hollowing a suite fail the
+# floor (# tests >= 62) makes deleting or hollowing the suite fail the
 # required check directly, and gating every test edit on a human label
 # would park ordinary work on Sam.
 #
@@ -21,54 +34,42 @@
 # runs the PR's OWN copy — a gate inside ci.yml can be edited or deleted by
 # the very diff it gates (bb-review P1 on PR #27; the estate hit this in
 # 2026-09, memory `gate-cannot-judge-what-supplies-it`). pull_request_target
-# runs the BASE branch's copy. The job never checks out PR code — it reads
-# files, labels, timeline and run metadata through the API only.
+# runs the BASE branch's copy. The job never checks out PR code — the diff
+# is read via the compare API pinned to the EVENT's head sha, not the live
+# head (a live-head read can stamp green onto a head it never saw).
 #
-# Freshness model: a label is valid for a head ONLY if it was applied
-# after that head arrived on the PR. Arrival time is server-side: the
-# earliest pull_request run created_at for the head sha — a normal
-# push, a force-push and a branch reset all create a fresh synchronize run
-# at arrival, and it cannot be backdated like committer.date (bb-review
-# round 9 P1 / round 10 P2). A label older than that is stale and the
-# step fails; a head-changing event also strips it (belt), but ONLY when
-# proven stale — a label Sam adds in the seconds before the synchronize
-# run starts is not destroyed.
-#
-# Other traps written against (estate memory + bb-review rounds):
-#   * newline-in-path / rename evasion: jq startswith on whole JSON
-#     strings; previous_filename checked too.
-#   * edited over-strip: strips only when changes.base is present.
-#   * pending-run replacement: a cancelled strip cannot open a hole —
-#     freshness is proven every run, not just on labeled.
-#   * moved-head overwrite: success exits only if the live head still
-#     equals the event's head.sha.
-#   * caps that fail closed: >=3000 changed files, label lists paginated.
+# Other traps written against:
+#   * newline-in-path / rename evasion: jq matching on whole JSON strings;
+#     previous_filename checked too.
+#   * moved-head overwrite: the live head is re-fetched before EVERY exit,
+#     success or early-green — a run can never stamp its verdict onto a
+#     head it was not triggered for.
+#   * compare files array caps at 300 — >=300 fails closed.
 #   * log injection: filenames print through jq @json, never raw.
-#   * permissions: actions: read (the runs list), issues: write (the
-#     strip), pull-requests: read, contents: read — nothing else.
+#   * concurrency keyed on head.sha, so a run can never cancel the newer
+#     head's judgment.
 #
 # NOT required by itself: this only blocks merges once `Workflow-change
 # gate` is a required check on main (post-merge step for Sam — a diff
 # cannot set that). pull_request_target runs only files on the BASE
 # branch, so this file cannot run until it is merged — its first
-# demonstration is the NEXT PR that touches a gated file. If a head ever
-# arrives with zero gate runs (automation-token push that triggers no
-# workflows), pt is empty and the gate stays red by design — a human
-# re-push or Sam resolves it.
+# demonstration is the NEXT PR that touches a gated file.
+#
+# KNOWN RESIDUAL: GitHub does not fire an event when commits are pushed to
+# a CLOSED pull request's branch. If a closed PR's branch gains a new head
+# and the PR is reopened, the reopened run sees the new head and demands a
+# fresh approval — closed by the sha binding, but stated for completeness.
 
 name: Workflow-change gate
 
 on:
   pull_request_target:
-    # edited is here only for base retargets — the step ignores it unless
-    # github.event.changes.base is present.
-    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited, review_requested, ready_for_review]
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: write # to strip `human-reviewed` when it is proven stale
-  actions: read # to read this workflow's runs for the server-side push time
+  pull-requests: read # reviews + compare
+  issues: read # labels
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha }}
@@ -83,33 +84,42 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
-      ACTION: ${{ github.event.action }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      BASE_CHANGED: ${{ github.event.changes.base && 'yes' || '' }}
-      OWNER: ${{ github.repository_owner }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      OWNER: ${{ github.repository_owner }} # personal-account repo: this IS Sam's login
     steps:
       - name: Gate CI-definition changes on human-reviewed
         shell: bash
         run: |
-          # One fetch, slurped — the 3000-file API cap would otherwise pass
-          # silently, and every jq read below works on the same JSON.
-          gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" > pr-files.json
-          total=$(jq -s 'map(length) | add' pr-files.json)
-          if [ "${total:-0}" -ge 3000 ]; then
-            echo "::error::PR reports $total changed files (>= 3000 API cap) — cannot prove no gate file is past the cap; failing closed"
+          # Moved-head check BEFORE anything that can exit 0 — a run reads
+          # the API at run time and must never stamp a verdict onto a head
+          # it was not triggered for.
+          live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          if [ "$live" != "$HEAD_SHA" ]; then
+            echo "::error::this run was triggered for $HEAD_SHA but the live head is $live — the newer head's own run decides"
+            exit 1
+          fi
+
+          # The diff pinned to the EVENT's head sha, via compare — never the
+          # live head's file list (bb-review round 12 P2).
+          gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA" > /tmp/cmp.json
+          total=$(jq '.files | length' /tmp/cmp.json)
+          if [ "${total:-0}" -ge 300 ]; then
+            echo "::error::PR reports $total changed files (>= 300 compare cap) — cannot prove no gate file is past the cap; failing closed"
             exit 1
           fi
 
           # The CI-definition set. Directory prefixes are root-anchored —
-          # only the root .github/, scripts/ and .husky/ run in CI. File
-          # names match on BASENAME, so a nested web/vitest.config.ts or
-          # server/.npmrc cannot walk past (bb-review round 11 P1).
-          # startswith/endswith run on whole JSON strings — a newline inside
-          # a path cannot split itself invisible.
-          hits=$(jq -sr 'def crit($f):
+          # only the root .github/, scripts/ and .husky/ run in CI — but
+          # scripts also match at ANY depth (a nested package.json test
+          # script can call web/scripts/x.mjs). File names match on
+          # BASENAME so web/vitest.config.ts or server/.npmrc cannot walk
+          # past. startswith/endswith run on whole JSON strings — a newline
+          # inside a path cannot split itself invisible.
+          hits=$(jq -r 'def crit($f):
               ($f | startswith(".github/"))
-              or ($f | startswith("scripts/"))
               or ($f | startswith(".husky/"))
+              or ($f | test("(^|/)scripts/"))
               or (($f | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
@@ -121,11 +131,16 @@ jobs:
                   or ($b | startswith("jest.config."))
                   or ($b | startswith("playwright.config."))
                   or ($b | startswith("babel.config."))
-                  or ($b | startswith("Dockerfile"))
+                  or ($b | startswith("webpack.config."))
+                  or ($b | startswith("rollup.config."))
+                  or ($b | startswith("next.config."))
+                  or ($b | startswith("postcss.config."))
+                  or ($b | test("Dockerfile"))
                   or ($b | startswith("docker-compose."))
                   or ($b | startswith("compose."))
-                  or ([ "package.json","package-lock.json","pnpm-lock.yaml","yarn.lock","bun.lockb","pnpm-workspace.yaml",".npmrc",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile" ] | index($b)));
-            .[] | .[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' pr-files.json)
+                  or ($b | endswith(".mk"))
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile","GNUmakefile" ] | index($b)));
+            .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
             exit 0
@@ -134,68 +149,34 @@ jobs:
           echo "gate-critical files changed:"
           while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
-          # Timeline once: the LAST label-state event for human-reviewed
-          # must be a `labeled` applied BY THE REPO OWNER (a personal
-          # account — repository_owner IS Sam's login here), not a bot
-          # identity and not followed by an unlabeled — a re-add by anyone
-          # else, or a removal after the owner's label, reads empty
-          # (bb-review round 11 P2).
-          gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
-          lt=$(jq -sr --arg owner "$OWNER" '[.[][] | select((.event == "labeled" or .event == "unlabeled") and .label.name == "human-reviewed")] | last
-              | select(.event == "labeled" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at // empty' /tmp/tl.json)
-
-          # Server-side arrival time of this head on the PR: the earliest
-          # pull_request run created for the head sha. pull_request_target
-          # runs carry the BASE sha in head_sha, which is why this queries
-          # the pull_request event — ci.yml's run on that head was created
-          # at push/reset time and is not backdatable (bb-review round 11
-          # P1). Empty only when no pull_request run exists for the head —
-          # fail closed (a head no workflow saw cannot be proven fresh).
-          gh api --paginate "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" > /tmp/runs.json
-          # -r matters: a quoted pt sorts before any digit, which would make
-          # the freshness compare always-true (verified live).
-          pt=$(jq -sr '[.[].workflow_runs[].created_at] | min // empty' /tmp/runs.json)
-
-          # Stale approval, leg 1: on a head/base-changing event strip the
-          # label — but ONLY a proven-stale one (lt absent or lt <= pt). A
-          # fresh label added in the run's startup window is kept
-          # (bb-review round 10 P3).
-          head_changed=0
-          if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; }; then
-            head_changed=1
-          fi
-          # lt EMPTY is ambiguous — the timeline can lag a label write, so
-          # never strip on an empty read; leg 2 still rejects anything that
-          # does not prove fresh (bb-review round 11 P3).
-          if [ "$head_changed" = 1 ] && [ -n "$lt" ] && { [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; }; then
-            gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1 || true
-            if [ -n "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-              echo "::error::$ACTION requires a fresh human-reviewed label, and a stale one could not be cleared — failing closed"
-              exit 1
-            fi
-            echo "$ACTION: stale-or-absent human-reviewed cleared — a fresh review is required for this head"
-          fi
-
-          # Presence: exact match computed in jq — label names never enter
-          # the script as text.
+          # 1/3 — estate convention: the human-reviewed label must be on the
+          # PR. Cosmetic beside the sha-bound approval, but it is the signal
+          # every managed repo already uses.
           if [ -z "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-            echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label after review. Agents never add it; every new head needs it again."
+            echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label AND approves the current head. Agents do neither; every new head needs both again."
             exit 1
           fi
 
-          # Stale approval, leg 2 — EVERY event: the owner-applied label
-          # must postdate the head's server-side arrival time.
-          if [ -z "$lt" ] || [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; then
-            echo "::error::human-reviewed (owner-applied at '${lt:-never}') does not postdate this head's arrival ('${pt:-unknown}') — it must be added after the head it approves"
+          # 2/3 — THE BINDING: an APPROVED review by the repo owner whose
+          # commit_id IS this head sha, submitted after the last
+          # base_ref_changed (a retarget invalidates approvals of the same
+          # sha — the diff changed under it).
+          gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" > /tmp/reviews.json
+          gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
+          last_retarget=$(jq -sr '[.[][] | select(.event == "base_ref_changed") | .created_at] | last // "1970-01-01T00:00:00Z"' /tmp/tl.json)
+          approved=$(jq -sr --arg owner "$OWNER" --arg sha "$HEAD_SHA" --arg rt "$last_retarget" '
+            [.[][] | select(.state == "APPROVED" and .commit_id == $sha and .user.login == $owner and (.user.type // "User") != "Bot" and .submitted_at > $rt)] | last | .submitted_at // empty' /tmp/reviews.json)
+          if [ -z "$approved" ]; then
+            echo "::error::no owner APPROVED review bound to head $HEAD_SHA (submitted after any base retarget at $last_retarget) — Sam approves THIS head, then labels human-reviewed"
             exit 1
           fi
 
-          # Moved-head overwrite: never let a run stamp green onto a head it
-          # was not triggered for — the newer head's own run decides.
+          # 3/3 — moved-head overwrite, again: between the diff read and now
+          # the head may have moved; the newest head's run decides.
           live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
           if [ "$live" != "$HEAD_SHA" ]; then
-            echo "::error::this run was triggered for $HEAD_SHA but the live head is $live — the newer head's run decides"
+            echo "::error::head moved to $live during this run — the newer head's run decides"
             exit 1
           fi
 
-          echo "human-reviewed label present, owner-applied and fresh on the live head — gate satisfied"
+          echo "label present + owner approval bound to the live head at $approved — gate satisfied"
