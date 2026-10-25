@@ -25,6 +25,12 @@
 # path filtering reports nothing and blocks the merge (BMB ci.yml v2.6.1
 # header documents the same rule).
 #
+# Workflow-change gate: a PR touching .github/workflows/ stays red until a
+# human adds the `human-reviewed` label (Devin SEC finding, PR #27) — the
+# gate cannot judge what supplies it. Step lives inside `ci` so the single
+# required `CI` context covers it; `labeled`/`unlabeled` are PR trigger
+# types so the label re-runs the job.
+#
 # This PR also fixes the test script: `node --test src/**/*.test.js` was
 # silently broken on this repo's runtime. Glob args to --test need node 21+,
 # and on a POSIX shell `**` expands to ONE level — so on node 20 (the
@@ -47,6 +53,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # labeled/unlabeled are on the trigger list so adding the
+    # `human-reviewed` label re-runs the workflow-change gate below —
+    # without them the gate can never turn green (BMB's risky-path gate
+    # works the same way).
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
@@ -67,12 +78,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # The workflow-change gate diffs against the PR base sha, which a
+          # shallow clone does not carry.
+          fetch-depth: 0
 
       - name: Setup Node 20 (the Dockerfile runtime)
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+
+      # GATE-CRITICAL, same rule as BMB's risky-path gate: a PR that rewrites
+      # the check that judges it must not merge on that check alone — a
+      # workflow-changing PR stays red until a human adds the
+      # `human-reviewed` label. Agents never add that label, so a workflow PR
+      # parks on Sam, not stuck (Devin SEC finding on PR #27 — this very PR
+      # trips it and demonstrates it). Runs as a step inside `ci`, not its
+      # own job, so the single required `CI` context covers it. Skipped on
+      # push/workflow_dispatch — the merge already passed it as a PR.
+      - name: Workflow changes need the human-reviewed label
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" | grep -q '^\.github/workflows/'; then
+            echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | grep -q '"human-reviewed"' || {
+              echo "::error::This PR changes .github/workflows/ — the gate cannot judge what supplies it. A human adds the 'human-reviewed' label after review; agents never do."
+              exit 1
+            }
+            echo "workflow diff + human-reviewed label present — gate satisfied"
+          else
+            echo "no .github/workflows/ changes — nothing to gate"
+          fi
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
