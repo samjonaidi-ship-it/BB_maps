@@ -150,6 +150,10 @@ jobs:
                   or ($b | startswith("vitest.setup."))
                   or ($b | startswith("vite.config."))
                   or ($b | startswith("jest.config."))
+                  or ($b | startswith("jest.setup."))
+                  or ($b | startswith("karma.conf."))
+                  or ($b | startswith("tsup.config."))
+                  or ($b | startswith("esbuild.config."))
                   or ($b | startswith("playwright.config."))
                   or ($b | startswith("cypress.config."))
                   or ($b | startswith("babel.config."))
@@ -180,7 +184,7 @@ jobs:
                   or ($b | startswith(".codecov."))
                   or ($b | startswith(".env"))
                   or ($b | endswith(".mk"))
-                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".prettierignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","lerna.json","compose.yml","compose.yaml","codecov.yml",".browserslistrc" ] | index($b)));
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".prettierignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","lerna.json","compose.yml","compose.yaml","codecov.yml","codecov.yaml",".browserslistrc" ] | index($b)));
             .[] | .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
