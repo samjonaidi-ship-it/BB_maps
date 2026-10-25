@@ -26,7 +26,7 @@
 #
 # Freshness model: a label is valid for a head ONLY if it was applied
 # after that head arrived on the PR. Arrival time is server-side: the
-# earliest pull_request_target run created_at for the head sha — a normal
+# earliest pull_request run created_at for the head sha — a normal
 # push, a force-push and a branch reset all create a fresh synchronize run
 # at arrival, and it cannot be backdated like committer.date (bb-review
 # round 9 P1 / round 10 P2). A label older than that is stale and the
@@ -100,27 +100,31 @@ jobs:
             exit 1
           fi
 
-          # The CI-definition set. startswith/endswith on whole JSON
-          # strings — a newline inside a path cannot split itself invisible.
+          # The CI-definition set. Directory prefixes are root-anchored —
+          # only the root .github/, scripts/ and .husky/ run in CI. File
+          # names match on BASENAME, so a nested web/vitest.config.ts or
+          # server/.npmrc cannot walk past (bb-review round 11 P1).
+          # startswith/endswith run on whole JSON strings — a newline inside
+          # a path cannot split itself invisible.
           hits=$(jq -sr 'def crit($f):
               ($f | startswith(".github/"))
               or ($f | startswith("scripts/"))
               or ($f | startswith(".husky/"))
-              or ($f | endswith("/package.json")) or $f == "package.json"
-              or ($f | endswith("/package-lock.json")) or $f == "package-lock.json"
-              or ($f | endswith("/pnpm-lock.yaml")) or $f == "pnpm-lock.yaml"
-              or ($f | endswith("/yarn.lock")) or $f == "yarn.lock"
-              or ($f | startswith("eslint.config."))
-              or ($f | startswith(".eslintrc"))
-              or ($f | startswith("tsconfig"))
-              or ($f | startswith("vitest.config."))
-              or ($f | startswith("vitest.workspace."))
-              or ($f | startswith("vitest.setup."))
-              or ($f | startswith("vite.config."))
-              or ($f | startswith("jest.config."))
-              or ($f | startswith("playwright.config."))
-              or ($f | startswith("babel.config."))
-              or ([ "pnpm-workspace.yaml","bun.lockb",".npmrc",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile","docker-compose.yml","Dockerfile" ] | index($f));
+              or (($f | split("/") | last) as $b |
+                  ($b | startswith("eslint.config."))
+                  or ($b | startswith(".eslintrc"))
+                  or ($b | startswith("tsconfig"))
+                  or ($b | startswith("vitest.config."))
+                  or ($b | startswith("vitest.workspace."))
+                  or ($b | startswith("vitest.setup."))
+                  or ($b | startswith("vite.config."))
+                  or ($b | startswith("jest.config."))
+                  or ($b | startswith("playwright.config."))
+                  or ($b | startswith("babel.config."))
+                  or ($b | startswith("Dockerfile"))
+                  or ($b | startswith("docker-compose."))
+                  or ($b | startswith("compose."))
+                  or ([ "package.json","package-lock.json","pnpm-lock.yaml","yarn.lock","bun.lockb","pnpm-workspace.yaml",".npmrc",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile" ] | index($b)));
             .[] | .[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' pr-files.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
@@ -130,18 +134,27 @@ jobs:
           echo "gate-critical files changed:"
           while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
-          # Timeline once: the last human-reviewed label applied BY THE
-          # REPO OWNER, not by a bot identity (Devin/Codex act under their
-          # own [bot] logins and must not self-approve). Agents share Sam's
-          # login — owner-vs-Sam is a norm, not a control, per the header.
+          # Timeline once: the LAST label-state event for human-reviewed
+          # must be a `labeled` applied BY THE REPO OWNER (a personal
+          # account — repository_owner IS Sam's login here), not a bot
+          # identity and not followed by an unlabeled — a re-add by anyone
+          # else, or a removal after the owner's label, reads empty
+          # (bb-review round 11 P2).
           gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
-          lt=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // empty' /tmp/tl.json)
+          lt=$(jq -sr --arg owner "$OWNER" '[.[][] | select((.event == "labeled" or .event == "unlabeled") and .label.name == "human-reviewed")] | last
+              | select(.event == "labeled" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at // empty' /tmp/tl.json)
 
           # Server-side arrival time of this head on the PR: the earliest
-          # pull_request_target run created for the head sha — created at
-          # push/reset/reopen time and not backdatable. Empty only when no
-          # run exists for the head (automation-token push) — fail closed.
-          pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request_target&per_page=100" --jq '[.workflow_runs[].created_at] | min // empty')
+          # pull_request run created for the head sha. pull_request_target
+          # runs carry the BASE sha in head_sha, which is why this queries
+          # the pull_request event — ci.yml's run on that head was created
+          # at push/reset time and is not backdatable (bb-review round 11
+          # P1). Empty only when no pull_request run exists for the head —
+          # fail closed (a head no workflow saw cannot be proven fresh).
+          gh api --paginate "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" > /tmp/runs.json
+          # -r matters: a quoted pt sorts before any digit, which would make
+          # the freshness compare always-true (verified live).
+          pt=$(jq -sr '[.[].workflow_runs[].created_at] | min // empty' /tmp/runs.json)
 
           # Stale approval, leg 1: on a head/base-changing event strip the
           # label — but ONLY a proven-stale one (lt absent or lt <= pt). A
@@ -151,7 +164,10 @@ jobs:
           if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; }; then
             head_changed=1
           fi
-          if [ "$head_changed" = 1 ] && { [ -z "$lt" ] || [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; }; then
+          # lt EMPTY is ambiguous — the timeline can lag a label write, so
+          # never strip on an empty read; leg 2 still rejects anything that
+          # does not prove fresh (bb-review round 11 P3).
+          if [ "$head_changed" = 1 ] && [ -n "$lt" ] && { [ -z "$pt" ] || [ ! "$lt" \> "$pt" ]; }; then
             gh api -X DELETE "repos/$REPO/issues/$PR/labels/human-reviewed" >/dev/null 2>&1 || true
             if [ -n "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
               echo "::error::$ACTION requires a fresh human-reviewed label, and a stale one could not be cleared — failing closed"
