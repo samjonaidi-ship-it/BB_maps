@@ -1,29 +1,30 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
 # A PR that changes what CI RUNS — anything under .github/, any package
-# manifest or lockfile (any depth — matched on basename), lint/test/bundler
-# configs, .npmrc (registry redirect), node/tool version pins, .husky/,
-# scripts/, Makefile/GNUmakefile/*.mk, Dockerfile*/docker-compose*/compose.*
-# — must not merge on the strength of a check the PR itself rewrote: the
-# gate cannot judge what supplies it, and a weakened "test": "exit 0", an
-# empty vitest include, or a .pnpmfile.cjs is the same bypass with a
-# different file. Same rule as BMB's risky-path gate: red until a human
-# approves AND the `human-reviewed` label is present. Agents never do
-# either — it is a NORM, not a technical control: the agent's gh token IS
-# Sam's login, so actor checks can exclude bots and strangers but cannot
-# tell Sam's own token from Sam. Same limitation as BMB's gate.
+# manifest or lockfile (any depth — matched on lowercased basename), lint/
+# test/bundler configs, .npmrc (registry redirect), node/tool version pins,
+# .husky/, scripts/ at any depth, Makefile/GNUmakefile/makefile/*.mk,
+# Dockerfile*/docker-compose*/compose.*, .yarn/ — must not merge on the
+# strength of a check the PR itself rewrote: the gate cannot judge what
+# supplies it, and a weakened "test": "exit 0", an empty vitest include, a
+# nested web/scripts/test.mjs or a makefile shadowing Makefile are the same
+# bypass with different names. Same rule as BMB's risky-path gate: red
+# until a human adds `human-reviewed`. Agents never add it — that is a
+# NORM, not a technical control: the agent's gh token IS Sam's login, so
+# actor checks can exclude bots and strangers but cannot tell Sam's own
+# token from Sam.
 #
-# THE BINDING (bb-review rounds 8-12): labels and timestamps cannot prove
-# WHICH head a human approved — a label click races the next push, and a
-# sha that arrives twice keeps its first arrival time, so a label applied
-# to a benign head could bless a gated sha it returned to. A REVIEW is the
-# only signal GitHub binds to a commit: this gate requires an APPROVED
-# review by the repo owner whose commit_id equals the event's head sha —
-# approval on sha A can never count for sha B. Approval must also postdate
-# the last base_ref_changed timeline event, so retargeting the PR
-# invalidates it. The `human-reviewed` label stays required too — estate
-# convention, and the signal Sam already knows — but it is cosmetic beside
-# the sha-bound approval.
+# THE BINDING (bb-review rounds 8-13): a label carries no sha, and an
+# APPROVED review cannot be produced — GitHub refuses approval of your own
+# PR, and agents author under Sam's login. The sha-binding therefore lives
+# in a label the GATE writes: when a `labeled` event fires for
+# `human-reviewed` by the owner, the event payload's pull_request.head.sha
+# IS the head the human was looking at; the gate adds `hr-<sha>` at that
+# moment. Every run then requires `hr-<this head sha>` — a label applied
+# to head X can never bless head Y, no reset, reorder or pending-cancel
+# can forge the ordering, and a head-changing event strips both labels so
+# the approval must be re-earned. Label names are exact-matched and the
+# hr- prefix is matched as hr-[0-9a-f]{40}.
 #
 # Test files themselves are deliberately NOT gated here — ci.yml's own awk
 # floor (# tests >= 62) makes deleting or hollowing the suite fail the
@@ -35,19 +36,21 @@
 # the very diff it gates (bb-review P1 on PR #27; the estate hit this in
 # 2026-09, memory `gate-cannot-judge-what-supplies-it`). pull_request_target
 # runs the BASE branch's copy. The job never checks out PR code — the diff
-# is read via the compare API pinned to the EVENT's head sha, not the live
-# head (a live-head read can stamp green onto a head it never saw).
+# is read via the compare API pinned to the EVENT's head sha.
 #
 # Other traps written against:
 #   * newline-in-path / rename evasion: jq matching on whole JSON strings;
 #     previous_filename checked too.
-#   * moved-head overwrite: the live head is re-fetched before EVERY exit,
-#     success or early-green — a run can never stamp its verdict onto a
+#   * moved-head overwrite: the live head is re-fetched before EVERY exit
+#     that could report green — a run can never stamp its verdict onto a
 #     head it was not triggered for.
 #   * compare files array caps at 300 — >=300 fails closed.
 #   * log injection: filenames print through jq @json, never raw.
 #   * concurrency keyed on head.sha, so a run can never cancel the newer
 #     head's judgment.
+#   * labeled-event recursion: writing hr-<sha> fires another `labeled`
+#     run, which only validates — the write happens only on a
+#     `human-reviewed` labeled event.
 #
 # NOT required by itself: this only blocks merges once `Workflow-change
 # gate` is a required check on main (post-merge step for Sam — a diff
@@ -55,21 +58,21 @@
 # branch, so this file cannot run until it is merged — its first
 # demonstration is the NEXT PR that touches a gated file.
 #
-# KNOWN RESIDUAL: GitHub does not fire an event when commits are pushed to
-# a CLOSED pull request's branch. If a closed PR's branch gains a new head
-# and the PR is reopened, the reopened run sees the new head and demands a
-# fresh approval — closed by the sha binding, but stated for completeness.
+# KNOWN RESIDUAL: pushes to a CLOSED PR's branch fire no event; on reopen
+# the new head has no hr-<sha> and the gate fails closed. And any actor
+# using Sam's own token is indistinguishable from Sam — the label is a
+# norm, and the gate's defense is that only Sam knows it is needed.
 
 name: Workflow-change gate
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled, edited, review_requested, ready_for_review]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 permissions:
   contents: read
-  pull-requests: read # reviews + compare
-  issues: read # labels
+  pull-requests: read # compare
+  issues: write # write hr-<sha>, strip stale labels
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha }}
@@ -84,8 +87,13 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
+      ACTION: ${{ github.event.action }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_CHANGED: ${{ github.event.changes.base && 'yes' || '' }}
+      EVENT_LABEL: ${{ github.event.label.name }}
+      SENDER: ${{ github.event.sender.login }}
+      SENDER_TYPE: ${{ github.event.sender.type }}
       OWNER: ${{ github.repository_owner }} # personal-account repo: this IS Sam's login
     steps:
       - name: Gate CI-definition changes on human-reviewed
@@ -109,18 +117,13 @@ jobs:
             exit 1
           fi
 
-          # The CI-definition set. Directory prefixes are root-anchored —
-          # only the root .github/, scripts/ and .husky/ run in CI — but
-          # scripts also match at ANY depth (a nested package.json test
-          # script can call web/scripts/x.mjs). File names match on
-          # BASENAME so web/vitest.config.ts or server/.npmrc cannot walk
-          # past. startswith/endswith run on whole JSON strings — a newline
-          # inside a path cannot split itself invisible.
+          # The CI-definition set, basename-matched and case-normalized.
           hits=$(jq -r 'def crit($f):
               ($f | startswith(".github/"))
               or ($f | startswith(".husky/"))
+              or ($f | startswith(".yarn/"))
               or ($f | test("(^|/)scripts/"))
-              or (($f | split("/") | last) as $b |
+              or (($f | ascii_downcase | split("/") | last) as $b |
                   ($b | startswith("eslint.config."))
                   or ($b | startswith(".eslintrc"))
                   or ($b | startswith("tsconfig"))
@@ -135,11 +138,16 @@ jobs:
                   or ($b | startswith("rollup.config."))
                   or ($b | startswith("next.config."))
                   or ($b | startswith("postcss.config."))
-                  or ($b | test("Dockerfile"))
+                  or ($b | startswith("prettier.config."))
+                  or ($b | startswith("tailwind.config."))
+                  or ($b | startswith("dockerfile"))
                   or ($b | startswith("docker-compose."))
                   or ($b | startswith("compose."))
+                  or ($b | startswith(".babelrc"))
+                  or ($b | startswith(".swcrc"))
+                  or ($b | startswith(".mocharc"))
                   or ($b | endswith(".mk"))
-                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","Makefile","GNUmakefile" ] | index($b)));
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile" ] | index($b)));
             .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
@@ -149,34 +157,42 @@ jobs:
           echo "gate-critical files changed:"
           while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
 
-          # 1/3 — estate convention: the human-reviewed label must be on the
-          # PR. Cosmetic beside the sha-bound approval, but it is the signal
-          # every managed repo already uses.
-          if [ -z "$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '[.[].name] | index("human-reviewed") // empty')" ]; then
-            echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label AND approves the current head. Agents do neither; every new head needs both again."
-            exit 1
+          # BINDING, write side: a `labeled` event for human-reviewed by the
+          # owner records the head it was applied to as `hr-<sha>`. Fires
+          # only on that event — the hr- write itself triggers a `labeled`
+          # run that just validates.
+          if [ "$ACTION" = "labeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ] && [ "$SENDER" = "$OWNER" ] && [ "$SENDER_TYPE" != "Bot" ]; then
+            gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
+            echo "recorded hr-$HEAD_SHA — the label is bound to this head"
           fi
 
-          # 2/3 — THE BINDING: an APPROVED review by the repo owner whose
-          # commit_id IS this head sha, submitted after the last
-          # base_ref_changed (a retarget invalidates approvals of the same
-          # sha — the diff changed under it).
-          gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" > /tmp/reviews.json
-          gh api --paginate "repos/$REPO/issues/$PR/timeline?per_page=100" > /tmp/tl.json
-          last_retarget=$(jq -sr '[.[][] | select(.event == "base_ref_changed") | .created_at] | last // "1970-01-01T00:00:00Z"' /tmp/tl.json)
-          approved=$(jq -sr --arg owner "$OWNER" --arg sha "$HEAD_SHA" --arg rt "$last_retarget" '
-            [.[][] | select(.state == "APPROVED" and .commit_id == $sha and .user.login == $owner and (.user.type // "User") != "Bot" and .submitted_at > $rt)] | last | .submitted_at // empty' /tmp/reviews.json)
-          if [ -z "$approved" ]; then
-            echo "::error::no owner APPROVED review bound to head $HEAD_SHA (submitted after any base retarget at $last_retarget) — Sam approves THIS head, then labels human-reviewed"
-            exit 1
+          # BINDING, erase side: a head/base change or an unlabel voids the
+          # approval — strip human-reviewed and every hr-* label.
+          if [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; } || { [ "$ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ]; }; then
+            for l in $(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name | select(. == "human-reviewed" or test("^hr-[0-9a-f]{40}$"))'); do
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/$l" >/dev/null 2>&1 || true
+            done
+            echo "$ACTION: approval labels stripped — a fresh human-reviewed is required for this head"
           fi
 
-          # 3/3 — moved-head overwrite, again: between the diff read and now
-          # the head may have moved; the newest head's run decides.
+          # VALIDATE: both the estate-convention label and the sha-bound
+          # record must be present for THIS head.
+          labels=$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name')
+          echo "$labels" | grep -qx 'human-reviewed' || {
+            echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label after reviewing. Agents never add it; every new head needs it again."
+            exit 1
+          }
+          echo "$labels" | grep -qx "hr-$HEAD_SHA" || {
+            echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record) — re-add the label on the current head"
+            exit 1
+          }
+
+          # Moved-head overwrite, again: between the diff read and now the
+          # head may have moved; the newest head's run decides.
           live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
           if [ "$live" != "$HEAD_SHA" ]; then
             echo "::error::head moved to $live during this run — the newer head's run decides"
             exit 1
           fi
 
-          echo "label present + owner approval bound to the live head at $approved — gate satisfied"
+          echo "human-reviewed label + hr-$HEAD_SHA binding on the live head — gate satisfied"
