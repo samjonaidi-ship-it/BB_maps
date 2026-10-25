@@ -1,7 +1,7 @@
 # BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
 #
 # A PR that changes what CI RUNS — anything under .github/, .husky/, .yarn/,
-# scripts|tools|bin|vitest-setup|test-setup|eslint-rules at any depth, any
+# scripts|tools|bin at the repo root, vitest-setup|test-setup|eslint-rules
 # package manifest or lockfile, lint/test/bundler configs, .npmrc (registry
 # redirect), node/tool version pins, makefiles, Dockerfiles, compose files,
 # monorepo runners (turbo.json, nx.json, justfile, Taskfile.*), coverage
@@ -88,7 +88,7 @@ concurrency:
   # Keyed on PR + ACTION + label name: a routine `edited` can never
   # replace the pending `labeled` run (the prime writer of hr-<sha>), and
   # an unrelated unlabel cannot replace a pending strip.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}-${{ github.event.label.name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}-${{ github.event.changes.base && 'base' || '' }}-${{ github.event.label.name }}
   cancel-in-progress: false
 
 jobs:
@@ -230,7 +230,13 @@ jobs:
           # BINDING, erase side: a head/base change or an unlabel voids the
           # approval. Skipped on manual re-runs (run_attempt > 1) — replaying
           # an old strip must not wipe a live approval (round 15 P3).
+          # On `unlabeled` re-check first: if human-reviewed is already
+          # back on the PR, the re-add won the race and there is nothing
+          # stale to strip — deleting it would eat a fresh approval.
           if [ "$RUN_ATTEMPT" = "1" ] && { [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; } || { [ "$ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ]; }; }; then
+            if [ "$ACTION" = "unlabeled" ] && gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name' | grep -qx 'human-reviewed'; then
+              echo "unlabeled run: human-reviewed is back on the PR — nothing stale to strip, skipping"
+            else
             for l in $(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name | select(. == "human-reviewed" or test("^hr-[0-9a-f]{40}$"))'); do
               gh api -X DELETE "repos/$REPO/issues/$PR/labels/$l" >/dev/null 2>&1 || echo "::warning::delete of label $l failed"
             done
@@ -245,6 +251,7 @@ jobs:
             # strips it from EVERY open PR and could un-approve a sibling
             # (bb-review round 16 P2). Label-list growth is cosmetic.
             echo "$ACTION: approval labels stripped (or none present) — a fresh human-reviewed is required for this head"
+            fi
           fi
 
           # Issue events once: the provenance chain needs
@@ -283,10 +290,16 @@ jobs:
             fi
           fi
 
-          # Re-fetch after the possible write, then the ordered chain:
-          # ul < owner-label < gate hr-write. A stale event satisfies nothing.
+          # Re-fetch EVERYTHING after the possible write — an approval
+          # withdrawn mid-run must not pass on reads taken before it.
           gh api --paginate "repos/$REPO/issues/$PR/events?per_page=100" > /tmp/ev.json
+          ul=$(jq -sr '[.[][] | select(.event == "unlabeled" and .label.name == "human-reviewed") | .created_at] | last // ""' /tmp/ev.json)
+          hr=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // ""' /tmp/ev.json)
           sb=$(jq -sr --arg sha "hr-$HEAD_SHA" '[.[][] | select(.event == "labeled" and .label.name == $sha and .actor.login == "github-actions[bot]") | .created_at] | last // ""' /tmp/ev.json)
+          gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name' | grep -qx 'human-reviewed' || {
+            echo "::error::human-reviewed was withdrawn while this ran"
+            exit 1
+          }
           if [ -z "$hr" ] || [ -z "$sb" ] || [ ! "$hr" \> "$ul" ] || [ ! "$sb" \> "$hr" ]; then
             echo "::error::provenance failed — need owner labeled at '${hr:-never}' after last unlabeled '${ul:-never}' and gate write at '${sb:-never}' after it"
             exit 1
