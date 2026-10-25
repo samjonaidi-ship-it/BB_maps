@@ -128,6 +128,9 @@ jobs:
 
           # The diff pinned to the EVENT's head sha, via compare — never the
           # live head's file list. Paginate to the API's own 3000-file cap.
+          # NOTE: GitHub returns the changed-file list ONLY on the first
+          # compare page, capped at 300 for the whole comparison — later
+          # pages carry commits, no files (bb-review round 21 P2).
           gh api --paginate "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA?per_page=100" > /tmp/cmp.json
           total=$(jq -s 'map(.files | length) | add' /tmp/cmp.json)
           # Cross-check against the PR's own count — a short read must never
@@ -199,7 +202,7 @@ jobs:
                   or ($b | startswith(".env"))
                   or ($b | endswith(".mk"))
                   or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".prettierignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","lerna.json","compose.yml","compose.yaml","codecov.yml","codecov.yaml",".browserslistrc",".gitmodules",".pre-commit-config.yaml" ] | index($b)));
-            .[] | .files[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
+            .[] | (.files // [])[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
           if [ -z "$hits" ]; then
             echo "no CI-definition changes — nothing to gate"
             exit 0
