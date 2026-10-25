@@ -55,8 +55,8 @@
 #   * strip replay: a manual re-run (run_attempt > 1) never strips — an
 #     old synchronize re-run cannot wipe a live approval.
 #   * strip is verified: labels are re-fetched after every strip attempt
-#     and survivors fail the run; repo-level hr- labels are deleted too,
-#     so the repo label list does not grow per approval.
+#     and survivors fail the run; repo-level labels are NEVER deleted
+#     (removing one strips it from every open PR — round 17 P2).
 #   * log injection: filenames print through jq @json, never raw.
 #   * org move: OWNER is repository_owner — on a personal repo that IS
 #     Sam's login; the job fails LOUDLY if the owner is an Organization.
@@ -227,9 +227,6 @@ jobs:
             fi
             # Repo-level cleanup: strip created hr-<sha> labels from the
             # repo's label list too, so it does not grow per approval.
-            for l in $(gh api --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name | select(test("^hr-[0-9a-f]{40}$"))'); do
-              gh api -X DELETE "repos/$REPO/labels/$l" >/dev/null 2>&1 || true
-            done
             # Repo-level hr- labels are NOT deleted: removing a repo label
             # strips it from EVERY open PR and could un-approve a sibling
             # (bb-review round 16 P2). Label-list growth is cosmetic.
