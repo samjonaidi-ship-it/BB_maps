@@ -1,0 +1,324 @@
+# BB_Maps CI-definition gate | v1.0.0 | 2026-10-25 | BB
+#
+# A PR that changes what CI RUNS — anything under .github/, .husky/, .yarn/,
+# scripts|tools|bin at the repo root, vitest-setup|test-setup|eslint-rules
+# package manifest or lockfile, lint/test/bundler configs, .npmrc (registry
+# redirect), node/tool version pins, makefiles, Dockerfiles, compose files,
+# monorepo runners (turbo.json, nx.json, justfile, Taskfile.*), coverage
+# config (.c8rc, .nycrc, codecov.yml) — must not merge on the strength of a
+# check the PR itself rewrote: the gate cannot judge what supplies it.
+# Same rule as BMB's risky-path gate: red until a human adds
+# `human-reviewed`. Agents never add it — that is a NORM, not a technical
+# control: the agent's gh token IS Sam's login, so actor checks can
+# exclude bots and strangers but cannot tell Sam's own token from Sam.
+#
+# THE BINDING (bb-review rounds 8-15): a label carries no sha (verified —
+# issue-events labeled.commit_id is null), and an APPROVED review cannot
+# exist (GitHub refuses approval of your own PR; agents author under Sam's
+# login). The sha-binding therefore lives in a label the GATE writes:
+# `hr-<sha>`. It is minted two ways, both provable through issue events:
+#   (a) a `labeled` run for human-reviewed writes hr-<event head sha>;
+#   (b) any run that finds human-reviewed present but hr-<sha> missing
+#       (the labeled run was dropped by GitHub's pending-run replacement)
+#       writes it RECOVERED — only when the owner's labeled event postdates
+#       the head's LATEST pull_request run created_at (its most recent
+#       arrival) and the last unlabeled event.
+# Provenance then requires the ordered chain
+#   last unlabeled < owner's human-reviewed label < gate's hr-<sha> write —
+# a stale event can never satisfy it, and a collaborator adding both names
+# by hand fails the actor checks. RESIDUAL (stated, not closed): any actor
+# using Sam's own token, or a workflow a PR gives a write token, can mint
+# labels — the defense is that only a human SHOULD know to.
+#
+# Test/spec FILES are deliberately NOT gated — ci.yml's own awk
+# floor (# tests >= 62) fails closed on deletion or discovery loss.
+# Assertion-hollowing keeps the count, and NO filename gate can see that —
+# it is what the human review is for.
+#
+# WHY pull_request_target AND a file of its own: a `pull_request` workflow
+# runs the PR's OWN copy — a gate inside ci.yml can be edited or deleted by
+# the very diff it gates (bb-review P1 on PR #27; the estate hit this in
+# 2026-09, memory `gate-cannot-judge-what-supplies-it`). pull_request_target
+# runs the BASE branch's copy. The job never checks out PR code — the diff
+# is read via the compare API pinned to the EVENT's head sha.
+#
+# Other traps written against:
+#   * newline-in-path / rename evasion: jq matching on whole JSON strings;
+#     previous_filename checked too.
+#   * moved-head overwrite: the live head is re-fetched before EVERY exit
+#     that could report green, and again right before the hr- write.
+#   * compare files paginate to the API's 3000-file cap — >=3000 fails
+#     closed.
+#   * dropped-writer / dropped-strip: concurrency is keyed on PR + ACTION
+#     + label name, so unrelated events cannot replace the pending run
+#     that writes or strips — and the recovery write closes the rest.
+#   * strip replay: a manual re-run (run_attempt > 1) never strips — an
+#     old synchronize re-run cannot wipe a live approval.
+#   * strip is verified: labels are re-fetched after every strip attempt
+#     and survivors fail the run; repo-level labels are NEVER deleted
+#     (removing one strips it from every open PR — round 17 P2).
+#   * log injection: filenames print through jq @json, never raw.
+#   * org move: OWNER is repository_owner — on a personal repo that IS
+#     Sam's login; the job fails LOUDLY if the owner is an Organization.
+#
+# NOT required by itself: this only blocks merges once `Workflow-change
+# gate` is a required check on main (post-merge step for Sam — a diff
+# cannot set that). pull_request_target runs only files on the BASE
+# branch, so this file cannot run until it is merged — its first
+# demonstration is the NEXT PR that touches a gated file.
+#
+# SAM's STEP on a gated PR: confirm the head sha in the PR header matches
+# what you reviewed, THEN add the `human-reviewed` label. The gate records
+# `hr-<sha>` at click time — the labeled event binds to the live head,
+# not the head you happened to view (bb-review round 14).
+
+name: Workflow-change gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+
+permissions:
+  contents: read
+  pull-requests: read # compare
+  issues: write # write/strip approval labels
+  actions: read # head-arrival time from pull_request runs
+
+concurrency:
+  # Keyed on PR + ACTION + label name: a routine `edited` can never
+  # replace the pending `labeled` run (the prime writer of hr-<sha>), and
+  # an unrelated unlabel cannot replace a pending strip.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.action }}-${{ github.event.changes.base && 'base' || '' }}-${{ github.event.label.name }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Workflow-change gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+      ACTION: ${{ github.event.action }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_CHANGED: ${{ github.event.changes.base && 'yes' || '' }}
+      EVENT_LABEL: ${{ github.event.label.name }}
+      SENDER: ${{ github.event.sender.login }}
+      SENDER_TYPE: ${{ github.event.sender.type }}
+      OWNER: ${{ github.repository_owner }}
+      OWNER_TYPE: ${{ github.event.repository.owner.type }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Gate CI-definition changes on human-reviewed
+        shell: bash
+        run: |
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            echo "::error::repository owner is an organization — OWNER=$OWNER matches no human login; the gate needs an explicit allowlist, failing loudly"
+            exit 1
+          fi
+
+          # Moved-head check BEFORE anything that can exit 0.
+          live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          if [ "$live" != "$HEAD_SHA" ]; then
+            echo "::error::this run was triggered for $HEAD_SHA but the live head is $live — the newer head's own run decides"
+            exit 1
+          fi
+
+          # The diff pinned to the EVENT's head sha, via compare — never the
+          # live head's file list. Paginate to the API's own 3000-file cap.
+          # NOTE: GitHub returns the changed-file list ONLY on the first
+          # compare page, capped at 300 for the whole comparison — later
+          # pages carry commits, no files (bb-review round 21 P2).
+          gh api --paginate "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA?per_page=100" > /tmp/cmp.json
+          total=$(jq -s 'map(.files | length) | add' /tmp/cmp.json)
+          # Cross-check against the PR's own count — a short read must never
+          # look like a small PR (bb-review round 19 P2). Live head was
+          # verified equal to HEAD_SHA, so changed_files is for this head.
+          expected=$(gh api "repos/$REPO/pulls/$PR" --jq '.changed_files')
+          if [ "${total:-0}" -lt "${expected:-3000}" ] || [ "${total:-0}" -ge 3000 ]; then
+            echo "::error::fetched $total of $expected changed files — cannot prove no gate file is unfetched; failing closed"
+            exit 1
+          fi
+
+          # The CI-definition set, basename-matched and case-normalized.
+          hits=$(jq -sr 'def crit($f):
+              ($f | startswith(".github/"))
+              or ($f | startswith(".husky/"))
+              or ($f | startswith(".yarn/"))
+              or ($f | ascii_downcase | test("^(scripts|tools|bin)/"))
+              or ($f | ascii_downcase | test("(^|/)(vitest-setup|test-setup|eslint-rules)/"))
+              # test dirs: NOT *.test.*/​*.spec.* — setup/fixture files in
+              # there change what CI proves; test bodies do not (round 19).
+              or (($f | ascii_downcase | test("(^|/)(tests?|__tests__|e2e)/")) and (($f | ascii_downcase | (contains(".test.") or contains(".spec."))) | not))
+              or (($f | ascii_downcase | split("/") | last) as $b |
+                  ($b | startswith("eslint.config."))
+                  or ($b | startswith(".eslintrc"))
+                  or ($b | startswith("tsconfig"))
+                  or ($b | startswith("vitest.config."))
+                  or ($b | startswith("vitest.workspace."))
+                  or ($b | startswith("vitest.setup."))
+                  or ($b | startswith("vite.config."))
+                  or ($b | startswith("jest.config."))
+                  or ($b | startswith("jest.setup."))
+                  or ($b | startswith("karma.conf."))
+                  or ($b | startswith("tsup.config."))
+                  or ($b | startswith("esbuild.config."))
+                  or ($b | startswith("playwright.config."))
+                  or ($b | startswith("cypress.config."))
+                  or ($b | startswith("babel.config."))
+                  or ($b | startswith("webpack.config."))
+                  or ($b | startswith("rollup.config."))
+                  or ($b | startswith("next.config."))
+                  or ($b | startswith("postcss.config."))
+                  or ($b | startswith("prettier.config."))
+                  or ($b | startswith("tailwind.config."))
+                  or ($b | startswith("commitlint.config."))
+                  or ($b | startswith("lint-staged.config."))
+                  or ($b | startswith("taskfile."))
+                  or ($b | startswith("setup."))
+                  or ($b | startswith("setuptests."))
+                  or ($b | startswith("setup-tests."))
+                  or ($b | startswith("test-setup."))
+                  or ($b | startswith("globalsetup."))
+                  or ($b | startswith("global-setup."))
+                  or ($b | startswith("global-teardown."))
+                  or ($b | startswith("vitest-setup."))
+                  or ($b | startswith("jest-setup."))
+                  or ($b | startswith("dockerfile"))
+                  or ($b | startswith("docker-compose."))
+                  or ($b | startswith(".babelrc"))
+                  or ($b | startswith(".swcrc"))
+                  or ($b | startswith(".mocharc"))
+                  or ($b | startswith(".c8rc"))
+                  or ($b | startswith(".nycrc"))
+                  or ($b | startswith(".lintstagedrc"))
+                  or ($b | startswith(".prettierrc"))
+                  or ($b | startswith(".stylelintrc"))
+                  or ($b | startswith(".dependency-cruiser."))
+                  or ($b | startswith("knip."))
+                  or ($b | startswith(".codecov."))
+                  or ($b | startswith(".env"))
+                  or ($b | endswith(".mk"))
+                  or ([ "package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","yarn.lock","bun.lock","bun.lockb","bunfig.toml","pnpm-workspace.yaml",".npmrc",".pnpmfile.cjs",".nvmrc",".node-version",".tool-versions",".eslintignore",".prettierignore",".yarnrc",".yarnrc.yml","makefile","gnumakefile","justfile","turbo.json","nx.json","lerna.json","compose.yml","compose.yaml","codecov.yml","codecov.yaml",".browserslistrc",".gitmodules",".pre-commit-config.yaml" ] | index($b)));
+            .[] | (.files // [])[] | select(crit(.filename) or (.previous_filename != null and crit(.previous_filename))) | .filename' /tmp/cmp.json)
+          if [ -z "$hits" ]; then
+            echo "no CI-definition changes — nothing to gate"
+            exit 0
+          fi
+          # Filenames can carry control characters — never write them raw.
+          echo "gate-critical files changed:"
+          while IFS= read -r f; do jq -rn --arg f "$f" '$f | @json'; done <<< "$hits"
+
+          # BINDING, write side: a `labeled` event for human-reviewed by the
+          # owner records the head it was applied to as `hr-<sha>`. Live
+          # head is re-checked right before the POST — a race with a
+          # synchronize strip must not write a stale record (round 15 P3).
+          if [ "$ACTION" = "labeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ] && [ "$SENDER" = "$OWNER" ] && [ "$SENDER_TYPE" != "Bot" ]; then
+            live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+            if [ "$live" = "$HEAD_SHA" ]; then
+              # DELETE first: re-adding an existing label creates NO event,
+              # which would leave provenance pointing at a stale write
+              # (bb-review round 16 P2). 404 when absent is fine.
+              # The issue-labels endpoint 404s on a label that does not
+              # exist in the repo — create it BEFORE the delete so the
+              # no-provenance window stays one call short (Devin BUG,
+              # PR #28; bb-review round 22 P3).
+              gh api -X POST "repos/$REPO/labels" -f "name=hr-$HEAD_SHA" -f "color=ededed" >/dev/null 2>&1 || true
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/hr-$HEAD_SHA" >/dev/null 2>&1 || true
+              gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
+              echo "recorded hr-$HEAD_SHA — the label is bound to this head"
+            else
+              echo "head moved to $live before the write — no hr- record; the newer head's run decides"
+              exit 1
+            fi
+          fi
+
+          # BINDING, erase side: a head/base change or an unlabel voids the
+          # approval. Skipped on manual re-runs (run_attempt > 1) — replaying
+          # an old strip must not wipe a live approval (round 15 P3).
+          # On `unlabeled` re-check first: if human-reviewed is already
+          # back on the PR, the re-add won the race and there is nothing
+          # stale to strip — deleting it would eat a fresh approval.
+          if [ "$RUN_ATTEMPT" = "1" ] && { [ "$ACTION" = "synchronize" ] || [ "$ACTION" = "reopened" ] || { [ "$ACTION" = "edited" ] && [ -n "$BASE_CHANGED" ]; } || { [ "$ACTION" = "unlabeled" ] && [ "$EVENT_LABEL" = "human-reviewed" ]; }; }; then
+            if [ "$ACTION" = "unlabeled" ] && gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name' | grep -qx 'human-reviewed'; then
+              echo "unlabeled run: human-reviewed is back on the PR — nothing stale to strip, skipping"
+            else
+            for l in $(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name | select(. == "human-reviewed" or test("^hr-[0-9a-f]{40}$"))'); do
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/$l" >/dev/null 2>&1 || echo "::warning::delete of label $l failed"
+            done
+            survivors=$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name | select(. == "human-reviewed" or test("^hr-[0-9a-f]{40}$"))')
+            if [ -n "$survivors" ]; then
+              echo "::error::approval labels could not all be cleared on $ACTION — failing closed"
+              exit 1
+            fi
+            # Repo-level cleanup: strip created hr-<sha> labels from the
+            # repo's label list too, so it does not grow per approval.
+            # Repo-level hr- labels are NOT deleted: removing a repo label
+            # strips it from EVERY open PR and could un-approve a sibling
+            # (bb-review round 16 P2). Label-list growth is cosmetic.
+            echo "$ACTION: approval labels stripped (or none present) — a fresh human-reviewed is required for this head"
+            fi
+          fi
+
+          # Issue events once: the provenance chain needs
+          #   last unlabeled < owner labeled(human-reviewed) < bot labeled(hr-<sha>)
+          gh api --paginate "repos/$REPO/issues/$PR/events?per_page=100" > /tmp/ev.json
+          ul=$(jq -sr '[.[][] | select(.event == "unlabeled" and .label.name == "human-reviewed") | .created_at] | last // ""' /tmp/ev.json)
+          hr=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // ""' /tmp/ev.json)
+
+          labels=$(gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name')
+          echo "$labels" | grep -qx 'human-reviewed' || {
+            echo "::error::This PR changes CI-definition files — a human adds the 'human-reviewed' label after reviewing the CURRENT head. Agents never add it; every new head needs it again."
+            exit 1
+          }
+
+          # RECOVERY WRITE: if the hr-<sha> record is missing but the
+          # owner's label provably came AFTER this head's latest arrival —
+          # the latest pull_request run created_at for the sha — and after
+          # the last unlabel, the labeled run that should have written it
+          # was dropped by pending-run replacement. Write it here; the head
+          # is verified live above and below.
+          if ! echo "$labels" | grep -qx "hr-$HEAD_SHA"; then
+            # --jq takes the EXPRESSION as its value — there is no -r flag;
+            # gh already prints raw strings (bb-review round 16 P1).
+            pt=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" --jq '[.workflow_runs[].created_at] | max // empty')
+            # ...and AFTER the last head-changing timeline event — a
+            # force-push back to an older sha must not let a label for a
+            # different head mint its hr- record (round 19 P2).
+            ht=$(jq -sr '[.[][] | select(.event == "head_ref_force_pushed" or .event == "reopened" or .event == "base_ref_changed") | .created_at] | max // ""' /tmp/ev.json)
+            if [ -n "$hr" ] && [ -n "$pt" ] && [ "$hr" \> "$pt" ] && [ "$hr" \> "$ul" ] && [ "$hr" \> "$ht" ]; then
+              gh api -X POST "repos/$REPO/labels" -f "name=hr-$HEAD_SHA" -f "color=ededed" >/dev/null 2>&1 || true
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/hr-$HEAD_SHA" >/dev/null 2>&1 || true
+              gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=hr-$HEAD_SHA" >/dev/null
+              echo "recovered hr-$HEAD_SHA — the dropped labeled run is healed by the ordering proof"
+            else
+              echo "::error::human-reviewed was not applied while head $HEAD_SHA was current (no hr-<sha> record, and no owner label event provably newer than this head's arrival '${pt:-unknown}') — REMOVE 'human-reviewed', then add it again on the current head (re-adding a present label fires no event)"
+              exit 1
+            fi
+          fi
+
+          # Re-fetch EVERYTHING after the possible write — an approval
+          # withdrawn mid-run must not pass on reads taken before it.
+          gh api --paginate "repos/$REPO/issues/$PR/events?per_page=100" > /tmp/ev.json
+          ul=$(jq -sr '[.[][] | select(.event == "unlabeled" and .label.name == "human-reviewed") | .created_at] | last // ""' /tmp/ev.json)
+          hr=$(jq -sr --arg owner "$OWNER" '[.[][] | select(.event == "labeled" and .label.name == "human-reviewed" and .actor.login == $owner and (.actor.type // "User") != "Bot") | .created_at] | last // ""' /tmp/ev.json)
+          sb=$(jq -sr --arg sha "hr-$HEAD_SHA" '[.[][] | select(.event == "labeled" and .label.name == $sha and .actor.login == "github-actions[bot]") | .created_at] | last // ""' /tmp/ev.json)
+          gh api --paginate "repos/$REPO/issues/$PR/labels?per_page=100" --jq '.[].name' | grep -qx 'human-reviewed' || {
+            echo "::error::human-reviewed was withdrawn while this ran"
+            exit 1
+          }
+          if [ -z "$hr" ] || [ -z "$sb" ] || [ ! "$hr" \> "$ul" ] || [ ! "$sb" \> "$hr" ]; then
+            echo "::error::provenance failed — need owner labeled at '${hr:-never}' after last unlabeled '${ul:-never}' and gate write at '${sb:-never}' after it"
+            exit 1
+          fi
+
+          # Moved-head overwrite, again.
+          live=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          if [ "$live" != "$HEAD_SHA" ]; then
+            echo "::error::head moved to $live during this run — the newer head's run decides"
+            exit 1
+          fi
+
+          echo "human-reviewed (owner, fresh) + hr-$HEAD_SHA (gate) on the live head — gate satisfied"
