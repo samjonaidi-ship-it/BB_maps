@@ -66,10 +66,10 @@ jobs:
       TZ: UTC # matches the Railway/production runtime convention (BMB suite)
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # was @v5
 
       - name: Setup Node 20 (the Dockerfile runtime)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # was @v4
         with:
           node-version: '20'
           cache: 'npm'
@@ -122,3 +122,41 @@ jobs:
       - name: Audit (critical only, advisory)
         continue-on-error: true
         run: npm audit --audit-level=critical
+
+  gitleaks:
+    permissions: { contents: read }
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: gitleaks - new secrets in this run's commits only
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          for i in 1 2 3; do
+            rm -f /tmp/gitleaks.tgz
+            curl -fsSL --max-time 60 "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz && break
+            echo "gitleaks download attempt $i failed - retrying"; sleep 5
+          done
+          [ -s /tmp/gitleaks.tgz ] || { echo "::error::gitleaks tarball download failed after 3 attempts (release outage or network)"; exit 1; }
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # Judge ONLY the commits this run introduces: the PR range on
+          # pull_request (the merge commit carries the base tip in its own
+          # history, so no extra fetch is needed), the pushed range on push.
+          # A full-history --all scan would go red on unrelated branches' refs
+          # and on pre-existing findings that are not this PR's to fix.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
+          elif [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
+            RANGE="${{ github.event.before }}..HEAD"
+          else
+            # dispatch/schedule/other: scan what this branch adds over main.
+            # A shallow HEAD~N fallback would let a manual run flip a red scan green.
+            MB=$(git merge-base origin/main HEAD 2>/dev/null) || { echo "::error::no merge-base with origin/main - scan range undetermined"; exit 1; }
+            RANGE="$MB..HEAD"
+          fi
+          echo "gitleaks range: $RANGE"
+          /tmp/gitleaks git . --log-opts="$RANGE" --redact --exit-code 1 --ignore-gitleaks-allow
