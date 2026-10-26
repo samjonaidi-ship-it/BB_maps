@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v1.17 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v1.17 | 2026-10-23 | BB
+<!-- BB-AGENT-CONTRACT v2.0 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v2.0 | 2026-10-26 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -316,6 +316,131 @@ optional machinery is disabled. Do not assume the digest or a watcher ran —
 check the mode. Hook rows are either **hard** (guards — a verdict that cannot
 run fails closed) or **optional** (injectors — fail open); a new row must say
 which it is, and a gate that cannot run must never silently pass.
+
+## 16. Every factual claim carries an evidence label
+
+Any claim about the estate that a later decision will rest on — a PR body
+asserting production state, a report to Sam, an estate-registry row, a
+recovery or drill claim — carries one of these labels:
+
+- `LIVE-VERIFIED`: queried from the production service during this execution.
+- `CODE-VERIFIED`: demonstrated by current source at a named commit.
+- `DATED-VERIFIED`: correct at a recorded date but must not be treated as
+  current.
+- `TEST-REQUIRED`: implementation exists or documentation claims support, but
+  behavior has not been exercised.
+- `OWNER-DECISION`: cannot be resolved technically without Sam choosing
+  policy, cost, retention, or risk tolerance.
+
+**No agent may translate `DATED-VERIFIED` or `TEST-REQUIRED` into "working."**
+A claim with no label is unverified — say "unverified" instead of assuming
+(§8's rule, applied to facts as well as tests). An `OWNER-DECISION` parks on
+Sam like any other escalation: state it plainly, never resolve it by guessing.
+
+## 17. Parallel write lanes and unattended runs — the stop conditions
+
+When several agents (or overnight lanes) run at once:
+
+- **At most three concurrent write lanes, and one write lane per repo.** A
+  second lane needing the same repo queues or picks another repo — it does not
+  share the checkout. Every lane works in its own worktree under
+  `.claude/worktrees/` (§9), on its own `agent/<task>` branch (§2).
+- **No lane touches payroll/QuickBooks-posting, auth, migrations-apply, or
+  CI/workflow/gate files.** Those park by design (§4); do not route around the
+  park.
+- **Every PR is armed only via `landed --arm`, and only after every commit is
+  pushed** (§13). A cloud agent leaves the PR unarmed and says so.
+- **Read-only lanes write artifacts to `Claude\REPORTS\` only** — no repo
+  writes.
+- **Handoff:** one `CHECKPOINT.md` block plus one report file listing what
+  landed, what parked, and what is queued — per lane, when the lane ends.
+
+**Stop and park** — write `PR-GOAL: parked #<n>: <reason>` (or the plain-word
+equivalent when no PR exists yet) and move to other work; never improvise —
+when:
+
+- a backup source and restore target cannot be uniquely identified;
+- a production mutation would be required before a disposable test
+  environment exists;
+- a table is silently excluded from backup;
+- a live setting contradicts a runbook;
+- a shared-infrastructure file is already claimed;
+- a reviewer's provider cannot be identified;
+- a security finding requires secret rotation;
+- branch protection would strand active PRs;
+- a repository transfer would affect packages, actions, Railway links, or
+  customer URLs without a tested plan;
+- more than five unmerged `agent/*` branches exist;
+- current uncommitted work exceeds the session's triage threshold.
+
+## 18. Session-start hooks run through the dispatcher
+
+`settings.json` carries **one** SessionStart entry —
+`session-start-dispatch.mjs` — never several entries each spawning a process.
+Serial entries timed out under load (110 hook timeouts in one Devin log;
+Devin's evaluator caps a hook call at ~15 s regardless of the declared
+timeout). The dispatcher runs its registered children in parallel, so wall
+time is the slowest child, not the sum.
+
+- The registered set lives in the dispatcher's `HOOKS` list (today:
+  `session-branch-check`, `global-memory-inject`, `compact-limit`). Adding a
+  session-start hook means adding a row there — never a second settings.json
+  entry.
+- Budgets are fixed and deliberately under the evaluator cap: 12 s child
+  deadline measured from process start, a 13.5 s watchdog that emits whatever
+  has settled (children report as they finish; a timed-out child's buffered
+  output is kept and merged if usable), and a 2 s stdin budget so an
+  open-but-unclosed pipe resolves partial input instead of freezing.
+- **Exit 0 always.** Session-start hooks are injectors in §15's sense — they
+  fail open; a dead injector must never wedge a session start. A spawning
+  error resolves that one child empty; it never loses its siblings.
+- **A skipped or timed-out hook must emit a `systemMessage`** — a check that
+  never ran must not read as a pass (a timed-out branch check is not a clean
+  branch).
+- Child stdout that is not hook JSON goes to `additionalContext`; the merge
+  warns on dropped keys and non-string values rather than silently
+  downgrading them.
+- The resume-card claim follows dispatcher delivery (the
+  `BB_DISPATCHED`/`__cardFile` handoff through `global-memory-inject`): a
+  session claims only the card it actually received.
+
+## 19. Backup and archive jobs use the completeness vocabulary
+
+A job that exports state into an archive with a manifest (BMB's nightly
+`neon_full_backup` is the reference implementation) uses these exact
+semantics — the vocabulary exists in the code; docs, PRs and drills must use
+the same words:
+
+- **`manifest.completeness`** is `complete` | `partial` | `critical_failure`:
+  a failed *critical* table is `critical_failure`; any other table error, or
+  detected cross-table orphans, is `partial`; `complete` means every table
+  exported **and** no orphans detected.
+- **`_PARTIAL` in the archive filename** marks any completeness short of
+  `complete` — a failed *non-critical* table marks it too. A normal-looking
+  archive name is the completeness guarantee; a table error that lands only
+  in `manifest.errors` with a normal filename is the bug class that let two
+  broken exports (a `ORDER BY` on a nonexistent column) hide for weeks.
+- **Every table error surfaces**, not just critical ones: a warn log, a
+  silent-failure event (kind `neon_backup_table_export_errors`), and a `partial`
+  cron status. "Non-fatal" must never mean "invisible."
+- **Drift** (`rowCountDrift`): exported row count vs a live `count(*)` taken
+  after export, direction `grew` | `lost` | `unknown`. Drift is informational
+  and **never lowers completeness** — `lost` means rows were deleted after
+  their page was exported, which is correct backup behavior, not corruption.
+- **Orphans** (`orphanRows`): a cross-table inconsistency inside the archive
+  itself (the ledger pair: `cal_day_op_rows` rows whose `op_id` is absent from
+  the exported `cal_day_ops`). Orphans **do** lower completeness to `partial`.
+- **Consistency** is declared honestly as `per-page-keyset`: pages are fetched
+  by keyset on real primary keys, not unbounded `SELECT *` or offset scans.
+  `complete` is **not** a point-in-time snapshot and **not** proven
+  cross-table consistent — a commit editing an already-exported parent can
+  leave a consistent-looking archive. Say so; do not overclaim.
+- Exports page under **heap-derived ceilings** so a large table degrades to
+  `partial`, never to a silently truncated response.
+- **Upload is verified by read-back**: the sha256 recorded for the archive is
+  computed on the object downloaded back from the destination, not only
+  pre-upload. A pre-upload hash proves intent, not integrity — a corrupted
+  upload must be detected the same night, not at the next monthly drill.
 
 <!-- END BB-AGENT-CONTRACT -->
 
