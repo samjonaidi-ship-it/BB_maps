@@ -60,12 +60,20 @@ concurrency:
 jobs:
   ci:
     name: CI
-    needs: [gitleaks]  # a new secret must block the required check, not run beside it
+    needs: [gitleaks]
+    if: always()  # a skipped job reads as success to branch protection - the first step fails closed instead
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       TZ: UTC # matches the Railway/production runtime convention (BMB suite)
     steps:
+      - name: Fail unless the gitleaks scan succeeded
+        if: needs.gitleaks.result != 'success'
+        env:
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+        run: |
+          echo "::error::gitleaks result is $GITLEAKS_RESULT - a skipped or failed scan is never a pass"
+          exit 1
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # was @v5
 
@@ -167,4 +175,6 @@ jobs:
           # .gitleaks.toml allowlist (config allowlists are NOT disabled by --ignore-gitleaks-allow)
           # must not be able to hide its own secret.
           printf '[extend]\nuseDefault = true\n' > /tmp/gitleaks-trusted.toml
-          /tmp/gitleaks git . --config /tmp/gitleaks-trusted.toml --log-opts="$RANGE" --redact --exit-code 1 --ignore-gitleaks-allow
+          # .gitleaksignore in the PR tree would also hide a finding (its fingerprint is printed on the first red run): use an empty one.
+          : > /tmp/gitleaks-empty-ignore
+          /tmp/gitleaks git . --config /tmp/gitleaks-trusted.toml --gitleaks-ignore-path /tmp/gitleaks-empty-ignore --log-opts="$RANGE" --redact --exit-code 1 --ignore-gitleaks-allow
