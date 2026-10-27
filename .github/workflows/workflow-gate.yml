@@ -80,7 +80,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # compare
+  pull-requests: write # compare; adding a label to a PR needs write here (403 on hr-<sha> otherwise)
   issues: write # write/strip approval labels
   actions: read # head-arrival time from pull_request runs
 
