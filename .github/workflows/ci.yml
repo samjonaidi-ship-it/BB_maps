@@ -184,4 +184,6 @@ jobs:
           printf '[extend]\nuseDefault = true\n' > /tmp/gitleaks-trusted.toml
           # .gitleaksignore in the PR tree would also hide a finding (its fingerprint is printed on the first red run): use an empty one.
           : > /tmp/gitleaks-empty-ignore
-          /tmp/gitleaks git . --config /tmp/gitleaks-trusted.toml --gitleaks-ignore-path /tmp/gitleaks-empty-ignore --log-opts="--text $RANGE" --redact --exit-code 1 --ignore-gitleaks-allow
+          # gitleaks also reads <source>/.gitleaksignore (and .gitleaks.toml): the scan reads history, not the work tree, so remove them first.
+          find . -type f -not -path './.git/*' -name '.gitleaks*' -delete
+          /tmp/gitleaks git . --config /tmp/gitleaks-trusted.toml --gitleaks-ignore-path /tmp/gitleaks-empty-ignore --log-opts="--text --diff-merges=first-parent $RANGE" --redact --exit-code 1 --ignore-gitleaks-allow
