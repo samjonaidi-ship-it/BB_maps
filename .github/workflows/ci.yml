@@ -1,4 +1,5 @@
 # BB_Maps CI | v1.0.0 | 2026-10-25 | BB
+# Gate-proof probe — harmless workflow change; the Workflow-change gate must stay red (no human-reviewed label).
 #
 # First CI for this repo — branch protection exists but had no check to
 # require, so every push to main deployed unreviewed. This workflow gives
