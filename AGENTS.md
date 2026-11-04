@@ -1,5 +1,5 @@
-<!-- BB-AGENT-CONTRACT v2.0 -- managed block. Edit the template, not the copies. -->
-# Agent Workflow Contract | Bainbridge Builders | v2.0 | 2026-10-26 | BB
+<!-- BB-AGENT-CONTRACT v2.1 -- managed block. Edit the template, not the copies. -->
+# Agent Workflow Contract | Bainbridge Builders | v2.1 | 2026-10-30 | BB
 
 **Every agent working in this repo follows this file — Claude Code, Devin (cloud
 AND desktop), Codex, and any future one.** It is deliberately IN THE REPO and
@@ -45,6 +45,10 @@ exception, but two different reviews apply, and the pace changes how each runs:
   workflow files, `scripts/check-risky-paths.mjs`, `scripts/risky-paths.json`,
   and the category that covers them — stays red until `human-reviewed` at
   EVERY pace: a PR rewriting the gate that judges it gets no advisory pass.
+  **Ask Sam for the label only when this gate is red on the current head**; a
+  green gate does not read it. Name the PR and the file that made it red. An
+  order to merge or fix a PR is not an order to add the label, and removing
+  and re-adding it after a push is adding it.
 - **The local pre-push reviewer** (`bb-review` on Sam's machine, not CI): at
   every pace it reads every code push before it goes out, against the repo's
   `REVIEW.md` and the touched files' past Devin findings, and a P1 blocks the
