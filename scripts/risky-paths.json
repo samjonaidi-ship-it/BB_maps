@@ -3,7 +3,7 @@
   "label": "human-reviewed",
   "_tuning": "Patterns are case-sensitive JavaScript regexes on repo-relative POSIX paths. ci-and-protection and deploy match real files; the others are guards for the first such file.",
   "categories": [
-    { "name": "auth", "why": "session/permission code", "patterns": ["(^|/)(auth|session)[^/]*\\.(js|mjs|cjs|ts)$", "(^|/)(permission|role|rbac|acl)[^/]*\\.(js|mjs|cjs|ts)$"] },
+    { "name": "auth", "why": "session/permission/admin-authorization code", "patterns": ["(^|/)(auth|session|admin|authz|authorize|authorization)[^/]*\\.(js|mjs|cjs|ts)$", "(^|/)(permission|role|rbac|acl)[^/]*\\.(js|mjs|cjs|ts)$"] },
     { "name": "migrations", "why": "schema writes are not revertable by reverting the commit", "patterns": ["^migrations/", "\\.sql$"] },
     { "name": "ci-and-protection", "why": "the guardrails themselves", "patterns": ["^\\.github/workflows/", "^\\.githooks/", "(^|/)branch-protection", "(^|/)risky-paths?\\.(json|mjs|js)$", "^\\.bb-risk$", "(^|/)AGENTS\\.md$"] },
     { "name": "secrets", "why": "credentials and tokens", "patterns": ["(^|/)\\.env", "(^|/)\\.npmrc$", "(^|/)[^/]*(credential|secret|token)[^/]*\\.(js|mjs|cjs|ts|json)$"] },
@@ -16,7 +16,7 @@
   "money_content_scan": false,
   "_money_content_scan": "Declared off 2026-11-04: no QuickBooks/payroll code in this repo.",
   "authz_content_scan": false,
-  "_authz_content_scan": "Declared off 2026-11-04: this repo is a map-tile/routing proxy with no authorization decisions.",
+  "_authz_content_scan": "Declared off 2026-11-04: this repo is a map-tile/routing proxy with no authorization decisions. admin*/authz*/authorize* files are covered by the auth filename category instead (Devin, PR #40).",
   "carpool_declare_content_scan": false,
   "_carpool_declare_content_scan": "Declared off 2026-11-04: no carpool-declaration route handlers; the canonical check fails closed on an undeclared scan, so the key is present."
 }
