@@ -1,0 +1,22 @@
+{
+  "_doc": "Paths that must not reach main on an agent's own authority (modeled on universal-auth scripts/risky-paths.json). A PR touching any of them needs the label below, added by a human. Created 2026-11-04 because BB_maps had none and the pre-push case-gate fails closed without it.",
+  "label": "human-reviewed",
+  "_tuning": "Patterns are case-sensitive JavaScript regexes on repo-relative POSIX paths. ci-and-protection and deploy match real files; the others are guards for the first such file.",
+  "categories": [
+    { "name": "auth", "why": "session/permission/admin-authorization code", "patterns": ["(^|/)(auth|session|admin|authz|authorize|authorization)[^/]*\\.(js|mjs|cjs|ts)$", "(^|/)(permission|role|rbac|acl)[^/]*\\.(js|mjs|cjs|ts)$"] },
+    { "name": "migrations", "why": "schema writes are not revertable by reverting the commit", "patterns": ["^migrations/", "\\.sql$"] },
+    { "name": "ci-and-protection", "why": "the guardrails themselves", "patterns": ["^\\.github/workflows/", "^\\.githooks/", "(^|/)branch-protection", "(^|/)risky-paths?\\.(json|mjs|js)$", "^\\.bb-risk$", "(^|/)AGENTS\\.md$"] },
+    { "name": "secrets", "why": "credentials and tokens", "patterns": ["(^|/)\\.env", "(^|/)\\.npmrc$", "(^|/)[^/]*(credential|secret|token)[^/]*\\.(js|mjs|cjs|ts|json)$"] },
+    { "name": "deploy", "why": "how the maps service ships", "patterns": ["^Dockerfile", "^docker-compose\\.yml$", "^docker-entrypoint\\.sh$", "^refresh-maps\\.sh$", "(^|/)railway\\.(json|toml)$", "(^|/)nixpacks\\."] },
+    { "name": "money", "why": "billing/payroll/QuickBooks posting", "patterns": ["(^|/)[^/]*(payroll|invoice|billing)[^/]*\\.(js|mjs|cjs|ts)$", "(^|/)qbo-(post|write|bill)"] }
+  ],
+  "_repo": "BB_maps",
+  "ddl_content_scan": false,
+  "_ddl_content_scan": "Declared off 2026-11-04: no database or DDL-writing script in this repo.",
+  "money_content_scan": false,
+  "_money_content_scan": "Declared off 2026-11-04: no QuickBooks/payroll code in this repo.",
+  "authz_content_scan": false,
+  "_authz_content_scan": "Declared off 2026-11-04: this repo is a map-tile/routing proxy with no authorization decisions. admin*/authz*/authorize* files are covered by the auth filename category instead (Devin, PR #40).",
+  "carpool_declare_content_scan": false,
+  "_carpool_declare_content_scan": "Declared off 2026-11-04: no carpool-declaration route handlers; the canonical check fails closed on an undeclared scan, so the key is present."
+}
